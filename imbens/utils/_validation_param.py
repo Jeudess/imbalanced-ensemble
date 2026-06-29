@@ -99,9 +99,64 @@ def _check_n_target_samples_int(y, n_target_samples, sampling_type):
         raise SamplingKindError
 
 
+def _check_n_target_samples_dict_under(target_stats, n_target_samples):
+    target_distr = copy(target_stats)
+    for class_label, n_target_sample in n_target_samples.items():
+        n_origin_sample = target_stats[class_label]
+        if n_target_sample > n_origin_sample:
+            raise ValueError(
+                f" The target number of samples of class {class_label}"
+                f" should be < {n_origin_sample} (number of samples"
+                f" in class {class_label}) to perform under-sampling,"
+                f" got {n_target_sample}."
+            )
+        else:
+            target_distr[class_label] = n_target_sample
+    return target_distr
+
+
+def _check_n_target_samples_dict_over(target_stats, n_target_samples):
+    target_distr = copy(target_stats)
+    for class_label, n_target_sample in n_target_samples.items():
+        n_origin_sample = target_stats[class_label]
+        if n_target_sample < n_origin_sample:
+            raise ValueError(
+                f" The target number of samples of class {class_label}"
+                f" should be > {n_origin_sample} (number of samples"
+                f" in class {class_label}) to perform over-sampling,"
+                f" got {n_target_sample}."
+            )
+        else:
+            target_distr[class_label] = n_target_sample
+    return target_distr
+
+
+def _check_n_target_samples_dict_hybrid(target_stats, n_target_samples):
+    target_distr = copy(target_stats)
+    if all(
+        n_target_samples[label] <= target_stats[label]
+        for label in n_target_samples.keys()
+    ):
+        raise Warning(
+            f"The target number of samples is smaller than the number"
+            f" of original samples for all classes. ONLY under-sampling"
+            f" will be carried out."
+        )
+    elif all(
+        n_target_samples[label] >= target_stats[label]
+        for label in n_target_samples.keys()
+    ):
+        raise Warning(
+            f"The target number of samples is greater than the number"
+            f" of original samples for all classes. ONLY over-sampling"
+            f" will be carried out."
+        )
+    target_distr.update(n_target_samples)
+    return target_distr
+
+
 def _check_n_target_samples_dict(y, n_target_samples, sampling_type):
     target_stats = dict(Counter(y))
-    # check that all keys in n_target_samples are also in y
     set_diff_sampling_strategy_target = set(n_target_samples.keys()) - set(
         target_stats.keys()
     )
@@ -110,7 +165,6 @@ def _check_n_target_samples_dict(y, n_target_samples, sampling_type):
             f"The {set_diff_sampling_strategy_target} target class is/are not "
             f"present in the data."
         )
-    # check that there is no negative number
     if any(n_samples <= 0 for n_samples in n_target_samples.values()):
         raise ValueError(
             f"The number of samples in a class must > 0. "
@@ -118,58 +172,11 @@ def _check_n_target_samples_dict(y, n_target_samples, sampling_type):
         )
 
     if sampling_type == 'under-sampling':
-        target_distr = copy(target_stats)
-        for class_label, n_target_sample in n_target_samples.items():
-            n_origin_sample = target_stats[class_label]
-            if n_target_sample > n_origin_sample:
-                raise ValueError(
-                    f" The target number of samples of class {class_label}"
-                    f" should be < {n_origin_sample} (number of samples"
-                    f" in class {class_label}) to perform under-sampling,"
-                    f" got {n_target_sample}."
-                )
-            else:
-                target_distr[class_label] = n_target_sample
-        return target_distr
-
+        return _check_n_target_samples_dict_under(target_stats, n_target_samples)
     elif sampling_type == 'over-sampling':
-        target_distr = copy(target_stats)
-        for class_label, n_target_sample in n_target_samples.items():
-            n_origin_sample = target_stats[class_label]
-            if n_target_sample < n_origin_sample:
-                raise ValueError(
-                    f" The target number of samples of class {class_label}"
-                    f" should be > {n_origin_sample} (number of samples"
-                    f" in class {class_label}) to perform over-sampling,"
-                    f" got {n_target_sample}."
-                )
-            else:
-                target_distr[class_label] = n_target_sample
-        return target_distr
-
+        return _check_n_target_samples_dict_over(target_stats, n_target_samples)
     elif sampling_type == "multi-class-hybrid-sampling":
-        target_distr = copy(target_stats)
-        if all(
-            n_target_samples[label] <= target_stats[label]
-            for label in n_target_samples.keys()
-        ):
-            raise Warning(
-                f"The target number of samples is smaller than the number"
-                f" of original samples for all classes. ONLY under-sampling"
-                f" will be carried out."
-            )
-        elif all(
-            n_target_samples[label] >= target_stats[label]
-            for label in n_target_samples.keys()
-        ):
-            raise Warning(
-                f"The target number of samples is greater than the number"
-                f" of original samples for all classes. ONLY over-sampling"
-                f" will be carried out."
-            )
-        target_distr.update(n_target_samples)
-        return target_distr
-
+        return _check_n_target_samples_dict_hybrid(target_stats, n_target_samples)
     else:
         raise SamplingKindError
 
