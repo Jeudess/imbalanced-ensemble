@@ -352,7 +352,7 @@ class BalanceCascadeClassifier(BaseImbalancedEnsemble):
                 dropped_index=dropped_index,
                 keep_populations=keep_populations,
                 classes_=classes_,
-                encode_map=self._encode_map,
+                encode_map=self._internal_state_['encode_map'],
                 sample_weight=sample_weight,
             )
 
@@ -373,7 +373,7 @@ class BalanceCascadeClassifier(BaseImbalancedEnsemble):
                 (X_resampled, y_resampled, dropped_index) = resample_out
                 estimator.fit(X_resampled, y_resampled)
 
-            self.estimators_features_.append(self.features_)
+            self.estimators_features_.append(self._internal_state_['features'])
             self.estimators_n_training_samples_[i_iter] = y_resampled.shape[0]
 
             # Print training infomation to console.
@@ -388,7 +388,7 @@ class BalanceCascadeClassifier(BaseImbalancedEnsemble):
 
         if i_iter == 0:
             self.y_pred_proba_latest = np.zeros(
-                (self._n_samples, self.n_classes_), dtype=np.float64
+                (self._internal_state_['n_samples'], self.n_classes_), dtype=np.float64
             )
         else:
             y_pred_proba_latest = self.y_pred_proba_latest

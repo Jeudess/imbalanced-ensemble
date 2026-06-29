@@ -443,7 +443,7 @@ def _parallel_decision_function(estimators, estimators_features, X):
     random_state=_get_parameter_docstring("random_state"),
     n_jobs=_get_parameter_docstring("n_jobs", **_properties),
 )
-class BaseImbalancedEnsemble(
+class BaseImbalancedEnsemble(  # pylint: disable=too-many-instance-attributes
     ImbalancedEnsembleClassifierMixin, BaseEnsemble, metaclass=ABCMeta
 ):
     """Base class for all imbalanced-ensemble classes that are
@@ -481,6 +481,38 @@ class BaseImbalancedEnsemble(
         The collection of fitted base estimators.
     """
 
+    @property
+    def random_state(self):
+        return self._config['random_state']
+
+    @random_state.setter
+    def random_state(self, value):
+        self._config['random_state'] = value
+
+    @property
+    def n_jobs(self):
+        return self._config['n_jobs']
+
+    @n_jobs.setter
+    def n_jobs(self, value):
+        self._config['n_jobs'] = value
+
+    @property
+    def verbose(self):
+        return self._config['verbose']
+
+    @verbose.setter
+    def verbose(self, value):
+        self._config['verbose'] = value
+
+    @property
+    def check_x_y_args(self):
+        return self._config['check_x_y_args']
+
+    @check_x_y_args.setter
+    def check_x_y_args(self, value):
+        self._config['check_x_y_args'] = value
+
     def __init__(
         self,
         estimator,
@@ -491,13 +523,15 @@ class BaseImbalancedEnsemble(
         verbose=0,
     ):
 
-        self.random_state = random_state
-        self.n_jobs = n_jobs
-        self.verbose = verbose
-        self.check_x_y_args = {
-            "accept_sparse": ["csr", "csc"],
-            "ensure_all_finite": False,
-            "dtype": None,
+        self._config = {
+            'random_state': random_state,
+            'n_jobs': n_jobs,
+            'verbose': verbose,
+            'check_x_y_args': {
+                "accept_sparse": ["csr", "csc"],
+                "ensure_all_finite": False,
+                "dtype": None,
+            },
         }
 
         super(BaseImbalancedEnsemble, self).__init__(
@@ -581,10 +615,12 @@ class BaseImbalancedEnsemble(
 
         # Remap output
         n_samples, self.n_features_in_ = X.shape
-        self.features_ = np.arange(self.n_features_in_)
-        self._n_samples = n_samples
+        self._internal_state_ = {
+            'features': np.arange(self.n_features_in_),
+            'n_samples': n_samples,
+        }
         y = self._validate_y(y)
-        self._encode_map = {
+        self._internal_state_['encode_map'] = {
             c: np.where(self.classes_ == c)[0][0] for c in self.classes_
         }
 
