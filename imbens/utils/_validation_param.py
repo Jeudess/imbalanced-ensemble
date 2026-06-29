@@ -497,76 +497,71 @@ TRAIN_VERBOSE_DICT_INFO = (
 )
 
 
+def _check_train_verbose_parallel(train_verbose, n_estimators_ensemble):
+    if isinstance(train_verbose, bool):
+        if train_verbose:
+            train_verbose_ = copy(TRAIN_VERBOSE_DEFAULT)
+            train_verbose_.update({'granularity': max(1, int(n_estimators_ensemble / 10))})
+            train_verbose_['print_distribution'] = False
+            return train_verbose_
+        return False
+    raise TypeError(
+        f"'train_verbose' can only be of type `bool`"
+        f" for ensemble classifiers trained in parallel,"
+        f" gor {type(train_verbose)}."
+    )
+
+
+def _check_train_verbose_iterative(train_verbose, train_verbose_):
+    if isinstance(train_verbose, bool):
+        if train_verbose:
+            return train_verbose_
+        return False
+
+    if isinstance(train_verbose, numbers.Integral):
+        train_verbose_.update({'granularity': train_verbose})
+        return train_verbose_
+
+    if isinstance(train_verbose, dict):
+        set_diff_verbose_keys = set(train_verbose.keys()) - set(TRAIN_VERBOSE_TYPE.keys())
+        if set_diff_verbose_keys:
+            raise ValueError(
+                f"'train_verbose' keys {set_diff_verbose_keys} are not supported."
+                + TRAIN_VERBOSE_DICT_INFO
+            )
+        for key, value in train_verbose.items():
+            if not isinstance(value, TRAIN_VERBOSE_TYPE[key]):
+                raise TypeError(
+                    f"train_verbose['{key}'] has wrong data type, should be {TRAIN_VERBOSE_TYPE[key]}."
+                    + TRAIN_VERBOSE_DICT_INFO
+                )
+        train_verbose_.update(train_verbose)
+        return train_verbose_
+
+    raise TypeError(
+        f"'train_verbose' should be of type `bool`, `int`, or `dict`, got {type(train_verbose)} instead."
+        + TRAIN_VERBOSE_DICT_INFO
+    )
+
+
 def check_train_verbose(
     train_verbose: bool or numbers.Integral or dict,
     n_estimators_ensemble: int,
     training_type: str,
     **ignored_properties,
 ):
-    # n_estimators_ensemble:int,):
-
-    train_verbose_ = copy(TRAIN_VERBOSE_DEFAULT)
-    train_verbose_.update({'granularity': max(1, int(n_estimators_ensemble / 10))})
-
     if training_type == 'parallel':
-        # For ensemble classifiers trained in parallel
-        # train_verbose can only be of type bool
-        if isinstance(train_verbose, bool):
-            if train_verbose == True:
-                train_verbose_['print_distribution'] = False
-                return train_verbose_
-            if train_verbose == False:
-                return False
-        else:
-            raise TypeError(
-                f"'train_verbose' can only be of type `bool`"
-                f" for ensemble classifiers trained in parallel,"
-                f" gor {type(train_verbose)}."
-            )
+        return _check_train_verbose_parallel(train_verbose, n_estimators_ensemble)
 
-    elif training_type == 'iterative':
-        # For ensemble classifiers trained in iterative manner
-        # train_verbose can be of type bool / int / dict
-        if isinstance(train_verbose, bool):
-            if train_verbose == True:
-                return train_verbose_
-            if train_verbose == False:
-                return False
+    if training_type == 'iterative':
+        train_verbose_ = copy(TRAIN_VERBOSE_DEFAULT)
+        train_verbose_.update({'granularity': max(1, int(n_estimators_ensemble / 10))})
+        return _check_train_verbose_iterative(train_verbose, train_verbose_)
 
-        if isinstance(train_verbose, numbers.Integral):
-            train_verbose_.update({'granularity': train_verbose})
-            return train_verbose_
-
-        if isinstance(train_verbose, dict):
-            # check key value type
-            set_diff_verbose_keys = set(train_verbose.keys()) - set(
-                TRAIN_VERBOSE_TYPE.keys()
-            )
-            if len(set_diff_verbose_keys) > 0:
-                raise ValueError(
-                    f"'train_verbose' keys {set_diff_verbose_keys} are not supported."
-                    + TRAIN_VERBOSE_DICT_INFO
-                )
-            for key, value in train_verbose.items():
-                if not isinstance(value, TRAIN_VERBOSE_TYPE[key]):
-                    raise TypeError(
-                        f"train_verbose['{key}'] has wrong data type, should be {TRAIN_VERBOSE_TYPE[key]}."
-                        + TRAIN_VERBOSE_DICT_INFO
-                    )
-            train_verbose_.update(train_verbose)
-            return train_verbose_
-
-        else:
-            raise TypeError(
-                f"'train_verbose' should be of type `bool`, `int`, or `dict`, got {type(train_verbose)} instead."
-                + TRAIN_VERBOSE_DICT_INFO
-            )
-
-    else:
-        raise NotImplementedError(
-            f"'check_train_verbose' for 'training_type' = {training_type}"
-            f" needs to be implemented."
-        )
+    raise NotImplementedError(
+        f"'check_train_verbose' for 'training_type' = {training_type}"
+        f" needs to be implemented."
+    )
 
 
 VISUALIZER_ENSEMBLES_EXAMPLE_INFO = " Example: {..., ensemble_name: ensemble, ...}"
