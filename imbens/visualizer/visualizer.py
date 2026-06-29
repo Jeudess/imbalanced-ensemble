@@ -899,6 +899,57 @@ class ImbalancedEnsembleVisualizer:
                 f" The possible values are {universal_set}."
             )
 
+    def _set_heatmap_titles(self, axes, on_datasets, on_ensembles):
+        pad = 10
+        row_titles = ["On dataset: <{}>".format(col) for col in on_datasets]
+        col_titles = ["Method: <{}>".format(row) for row in on_ensembles]
+        for ax, col_title in zip(axes[0], col_titles):
+            ax.annotate(
+                col_title,
+                xy=(0.5, 1),
+                xytext=(0, pad),
+                xycoords="axes fraction",
+                textcoords="offset points",
+                ha="center",
+                va="baseline",
+                **self._title_styles['row_col'],
+            )
+        for ax, row_title in zip(axes[:, 0], row_titles):
+            ax.annotate(
+                row_title,
+                xy=(0, 0.5),
+                xytext=(-ax.yaxis.labelpad - pad, 0),
+                xycoords=ax.yaxis.label,
+                textcoords="offset points",
+                ha="right",
+                va="center",
+                rotation=90,
+                **self._title_styles['row_col'],
+            )
+
+    def _plot_heatmap_subplots(
+        self, axes, on_datasets, on_ensembles, heatmap_kwargs, false_pred_only
+    ):
+        conf_matrices = self._fit_data.conf_matrices_
+        n_rows_fig, n_columns_fig = axes.shape
+        for dataset_name, i_row in zip(on_datasets, range(n_rows_fig)):
+            for ensemble_name, i_col in zip(on_ensembles, range(n_columns_fig)):
+                ax = axes[i_row, i_col]
+                conf_matrix_df = conf_matrices[ensemble_name][dataset_name]
+                kwargs = {
+                    "data": conf_matrix_df,
+                    "annot": True,
+                    "fmt": "d",
+                    "linewidths": 0.5,
+                    "ax": ax,
+                }
+                kwargs.update(heatmap_kwargs)
+                if false_pred_only:
+                    kwargs["mask"] = np.identity(conf_matrix_df.shape[0])
+                sns.heatmap(**kwargs)
+                ax.set_xlabel("Predicted Label", **self._title_styles['axis'])
+                ax.set_ylabel("Ground Truth", **self._title_styles['axis'])
+
     def confusion_matrix_heatmap(
         self,
         on_ensembles: list = None,
@@ -990,59 +1041,10 @@ class ImbalancedEnsembleVisualizer:
         fig, axes = plt.subplots(n_rows_fig, n_columns_fig, figsize=figsize)
         axes = np.array(axes).reshape(n_rows_fig, n_columns_fig)
 
-        # Set titles for each column and row
-        pad = 10
-        row_titles = ["On dataset: <{}>".format(col) for col in on_datasets]
-        col_titles = ["Method: <{}>".format(row) for row in on_ensembles]
-        # Set column titles
-        for ax, col_title in zip(axes[0], col_titles):
-            ax.annotate(
-                col_title,
-                xy=(0.5, 1),
-                xytext=(0, pad),
-                xycoords="axes fraction",
-                textcoords="offset points",
-                ha="center",
-                va="baseline",
-                **self._title_styles['row_col'],
-            )
-
-        # Set row titles
-        for ax, row_title in zip(axes[:, 0], row_titles):
-            ax.annotate(
-                row_title,
-                xy=(0, 0.5),
-                xytext=(-ax.yaxis.labelpad - pad, 0),
-                xycoords=ax.yaxis.label,
-                textcoords="offset points",
-                ha="right",
-                va="center",
-                rotation=90,
-                **self._title_styles['row_col'],
-            )
-
-        # Plot confusion matrix heatmap on each ax
-        conf_matrices = self._fit_data.conf_matrices_
-        for dataset_name, i_row in zip(on_datasets, range(n_rows_fig)):
-            for ensemble_name, i_col in zip(on_ensembles, range(n_columns_fig)):
-                ax = axes[i_row, i_col]
-                conf_matrix_df = conf_matrices[ensemble_name][dataset_name]
-                # Use seaborn.heatmap for visualization
-                kwargs = {
-                    "data": conf_matrix_df,
-                    "annot": True,
-                    "fmt": "d",
-                    "linewidths": 0.5,
-                    "ax": ax,
-                }
-                kwargs.update(heatmap_kwargs_)
-                # if false_pred_only, set mask to the heatmap
-                if false_pred_only:
-                    kwargs["mask"] = np.identity(conf_matrix_df.shape[0])
-                ax = sns.heatmap(**kwargs)
-                # Set x_label and y_label properties
-                ax.set_xlabel("Predicted Label", **self._title_styles['axis'])
-                ax.set_ylabel("Ground Truth", **self._title_styles['axis'])
+        self._set_heatmap_titles(axes, on_datasets, on_ensembles)
+        self._plot_heatmap_subplots(
+            axes, on_datasets, on_ensembles, heatmap_kwargs_, false_pred_only
+        )
 
         # Use tight layout
         height_rect = (total_height - RESERVED_SUPTITLE_INCHES * 1.3) / total_height
