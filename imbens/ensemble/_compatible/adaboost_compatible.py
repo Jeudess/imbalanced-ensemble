@@ -22,12 +22,14 @@ if not LOCAL_DEBUG:
         check_train_verbose,
         check_type,
     )
+    from .._boost import _TrainingState
     from ..base import MAX_INT, ImbalancedEnsembleClassifierMixin
 else:  # pragma: no cover
     import sys  # For local test
 
     sys.path.append("../..")
     from ensemble.base import ImbalancedEnsembleClassifierMixin, MAX_INT
+    from ensemble._boost import _TrainingState
     from utils._validation_data import check_eval_datasets
     from utils._validation_param import check_train_verbose, check_eval_metrics
     from utils._validation import _deprecate_positional_args
@@ -158,6 +160,9 @@ class CompatibleAdaBoostClassifier(
     {example}
     """
 
+    __name__ = _method_name
+    _properties = _properties
+
     def __init__(
         self,
         estimator=None,
@@ -178,8 +183,7 @@ class CompatibleAdaBoostClassifier(
             random_state=random_state,
         )
 
-        self.__name__ = _method_name
-        self._properties = _properties
+        self._train_state_ = _TrainingState()
 
     @_deprecate_positional_args
     @FuncSubstitution(
@@ -255,17 +259,17 @@ class CompatibleAdaBoostClassifier(
         X, y = validate_data(self, X, y, **check_x_y_args)
 
         # Check evaluation data
-        self.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
+        self._train_state_.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
 
         self.classes_, _ = np.unique(y, return_inverse=True)
         self.n_classes_ = len(self.classes_)
 
-        self.origin_distr_ = dict(Counter(y))
-        self.target_distr_ = dict(Counter(y))
+        self._train_state_.origin_distr_ = dict(Counter(y))
+        self._train_state_.target_distr_ = dict(Counter(y))
 
-        self.eval_metrics_ = check_eval_metrics(eval_metrics)
+        self._train_state_.eval_metrics_ = check_eval_metrics(eval_metrics)
 
-        self.train_verbose_ = check_train_verbose(
+        self._train_state_.train_verbose_ = check_train_verbose(
             train_verbose, self.n_estimators, **self._properties
         )
 
@@ -277,9 +281,9 @@ class CompatibleAdaBoostClassifier(
         if np.any(sample_weight < 0):
             raise ValueError("sample_weight cannot contain negative weights")
 
-        self.raw_sample_weight_ = sample_weight
+        self._train_state_.raw_sample_weight_ = sample_weight
 
-        sample_weight = copy(self.raw_sample_weight_)
+        sample_weight = copy(self._train_state_.raw_sample_weight_)
 
         self._validate_estimator()
 
@@ -290,11 +294,11 @@ class CompatibleAdaBoostClassifier(
         self.estimators_ = []
         self.estimator_weights_ = np.zeros(self.n_estimators, dtype=np.float64)
         self.estimator_errors_ = np.ones(self.n_estimators, dtype=np.float64)
-        self.estimators_n_training_samples_ = np.zeros(self.n_estimators, dtype=int)
+        self._train_state_.estimators_n_training_samples_ = np.zeros(self.n_estimators, dtype=int)
 
         # Genrate random seeds array
         seeds = random_state.randint(MAX_INT, size=self.n_estimators)
-        self._seeds = seeds
+        self._train_state_._seeds = seeds
 
         for iboost in range(self.n_estimators):
             # Boosting step
@@ -304,7 +308,7 @@ class CompatibleAdaBoostClassifier(
 
             self.estimator_weights_[iboost] = estimator_weight
             self.estimator_errors_[iboost] = estimator_error
-            self.estimators_n_training_samples_[iboost] = y.shape[0]
+            self._train_state_.estimators_n_training_samples_[iboost] = y.shape[0]
 
             # Print training infomation to console.
             self._training_log_to_console(iboost, y)
