@@ -219,10 +219,34 @@ RandomOverSampler # doctest: +NORMALIZE_WHITESPACE
             X_new = sparse.csr_matrix(X_new, dtype=X.dtype)
         return X_new
 
-    def _fit_resample(self, X, y, sample_weight=None):
+    def _init_resampling(self, X):
         random_state = check_random_state(self.random_state)
-
         X = self._validate_shrinkage(X)
+        return random_state, X
+
+    def _concatenate_resampled(self, X_resampled, y_resampled, X):
+        if sparse.issparse(X):
+            X_resampled = sparse.vstack(X_resampled, format=X.format)
+        else:
+            X_resampled = np.vstack(X_resampled)
+        y_resampled = np.hstack(y_resampled)
+        return X_resampled, y_resampled
+
+    def _build_sample_weight_result(self, sample_weight, y_resampled, y):
+        sample_weight_new = np.empty(
+            y_resampled.shape[0] - y.shape[0], dtype=np.float64
+        )
+        sample_weight_new[:] = np.mean(sample_weight)
+        sample_weight_resampled = np.hstack(
+            [sample_weight, sample_weight_new]
+        ).reshape(-1, 1)
+        sample_weight_resampled = np.squeeze(
+            normalize(sample_weight_resampled, axis=0, norm="l1")
+        )
+        return sample_weight_resampled
+
+    def _fit_resample(self, X, y, sample_weight=None):
+        random_state, X = self._init_resampling(X)
 
         X_resampled = [X.copy()]
         y_resampled = [y.copy()]
@@ -259,27 +283,16 @@ RandomOverSampler # doctest: +NORMALIZE_WHITESPACE
                 )
 
         self.sample_indices_ = np.array(sample_indices)
-
-        if sparse.issparse(X):
-            X_resampled = sparse.vstack(X_resampled, format=X.format)
-        else:
-            X_resampled = np.vstack(X_resampled)
-        y_resampled = np.hstack(y_resampled)
+        X_resampled, y_resampled = self._concatenate_resampled(
+            X_resampled, y_resampled, X
+        )
 
         if sample_weight_flag:
-            sample_weight_new = np.empty(
-                y_resampled.shape[0] - y.shape[0], dtype=np.float64
-            )
-            sample_weight_new[:] = np.mean(sample_weight)
-            sample_weight_resampled = np.hstack(
-                [sample_weight, sample_weight_new]
-            ).reshape(-1, 1)
-            sample_weight_resampled = np.squeeze(
-                normalize(sample_weight_resampled, axis=0, norm="l1")
+            sample_weight_resampled = self._build_sample_weight_result(
+                sample_weight, y_resampled, y
             )
             return X_resampled, y_resampled, sample_weight_resampled
-        else:
-            return X_resampled, y_resampled
+        return X_resampled, y_resampled
 
     def _more_tags(self):  # pragma: no cover
         return {
