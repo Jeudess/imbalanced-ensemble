@@ -21,6 +21,52 @@ from typing import OrderedDict
 import tqdm
 
 
+def _get_data_path(data_home):
+    if data_home is None:
+        data_home = Path(user_cache_dir("imbens")) / "datasets"
+        data_home.mkdir(parents=True, exist_ok=True)
+        return data_home
+    if not isinstance(data_home, Path):
+        data_home = Path(data_home)
+    if not data_home.is_dir():
+        raise ValueError(f"data_home {data_home} is not a directory")
+    data_home.mkdir(parents=True, exist_ok=True)
+    return data_home
+
+
+def _save_data(X, y, data_home, file_name):
+    np.savez_compressed(data_home / file_name, X=X, y=y)
+
+
+def _load_data(data_home, file_name):
+    data = np.load(data_home / file_name, allow_pickle=True)
+    return data["X"], data["y"]
+
+
+def _validate_openml_params(openml_id, cat_preprocess, data_home):
+    assert isinstance(openml_id, int), "openml_id must be an integer"
+    assert cat_preprocess in [
+        "drop",
+        "onehot",
+        "ordinal",
+    ], "cat_preprocess must be one of ['drop', 'onehot', 'ordinal']"
+    assert isinstance(
+        data_home, (str, Path, type(None))
+    ), "data_home must be a string, Path or None"
+
+
+def _encode_target(y):
+    y_map = y.value_counts().sort_values()[::-1].index
+    y_map = {v: i for i, v in enumerate(y_map)}
+    return y.map(y_map)
+
+
+def _standardize_numeric(X, feats_type):
+    scaler = StandardScaler()
+    X[feats_type["num"]] = scaler.fit_transform(X[feats_type["num"]])
+    return X
+
+
 def _preprocess_feature(feat, X, feats_type):
     if is_any_real_numeric_dtype(X[feat]):
         feats_type["num"].append(feat)
@@ -95,61 +141,23 @@ def _fetch_openml_data(openml_id, cat_preprocess="onehot", data_home=None):
     If the dataset is already cached locally, it will be loaded from the cache.
     Otherwise, the dataset will be downloaded, preprocessed, and saved locally.
     """
+    _validate_openml_params(openml_id, cat_preprocess, data_home)
 
-    def get_data_path(data_home):
-        if data_home is None:
-            data_home = Path(user_cache_dir("imbens")) / "datasets"
-            data_home.mkdir(parents=True, exist_ok=True)
-            return data_home
-
-        if not isinstance(data_home, Path):
-            data_home = Path(data_home)
-        if not data_home.is_dir():
-            raise ValueError(f"data_home {data_home} is not a directory")
-        data_home.mkdir(parents=True, exist_ok=True)
-        return data_home
-
-    def save_data(X, y, data_home, file_name):
-        np.savez_compressed(data_home / file_name, X=X, y=y)
-        # print(f"Data saved to {data_home / file_name}")
-
-    def load_data(data_home, file_name):
-        data = np.load(data_home / file_name, allow_pickle=True)
-        X = data["X"]
-        y = data["y"]
-        return X, y
-
-    assert isinstance(openml_id, int), "openml_id must be an integer"
-    assert cat_preprocess in [
-        "drop",
-        "onehot",
-        "ordinal",
-    ], "cat_preprocess must be one of ['drop', 'onehot', 'ordinal']"
-    assert isinstance(
-        data_home, (str, Path, type(None))
-    ), "data_home must be a string, Path or None"
-
-    data_home = get_data_path(data_home)
+    data_home = _get_data_path(data_home)
     dataset = openml.datasets.get_dataset(openml_id)
     file_name = f"{dataset.id}_{cat_preprocess}_{dataset.name}.npz"
 
-    # check if data is already cached
     try:
-        X, y = load_data(data_home, file_name)
-        # print(f"Data loaded from {data_home / file_name}")
+        X, y = _load_data(data_home, file_name)
         return X, y
     except FileNotFoundError:
-        # print(f"Data not cached in {data_home}, processing from scratch.")
         pass
 
     X, y, cat_ind, feat_names = dataset.get_data(
         target=dataset.default_target_attribute
     )
 
-    # target encoding, smaller classes aer assigned larger values
-    y_map = y.value_counts().sort_values()[::-1].index
-    y_map = {v: i for i, v in enumerate(y_map)}
-    y = y.map(y_map)
+    y = _encode_target(y)
 
     feats_type = {"num": [], "bin_cat": [], "multi_cat": [], "drop": []}
     for feat in X.columns:
@@ -159,12 +167,9 @@ def _fetch_openml_data(openml_id, cat_preprocess="onehot", data_home=None):
     X = X.drop(columns=feats_type["drop"])
     X = _CAT_PREPROCESSORS[cat_preprocess](X, feats_type, ord_encoder)
 
-    # standardize numerical columns
-    scaler = StandardScaler()
-    X[feats_type["num"]] = scaler.fit_transform(X[feats_type["num"]])
+    X = _standardize_numeric(X, feats_type)
 
-    # save data
-    save_data(X, y, data_home, file_name)
+    _save_data(X, y, data_home, file_name)
 
     return X, y
 
