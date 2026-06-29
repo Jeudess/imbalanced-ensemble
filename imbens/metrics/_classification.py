@@ -37,6 +37,8 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_consistent_length, column_or_1d
 
+_AVERAGE_OPTIONS = (None, "micro", "macro", "weighted", "samples")
+
 
 def _check_average_validity(average, average_options):
     if average not in average_options and average != "binary":
@@ -156,6 +158,22 @@ def _compute_final_average(
     return sensitivity, specificity, true_sum
 
 
+def _compute_sensitivity_specificity(tn_sum, pred_sum, tp_sum, true_sum, average, warn_for):
+    with np.errstate(divide="ignore", invalid="ignore"):
+        specificity = _prf_divide(
+            tn_sum,
+            tn_sum + pred_sum - tp_sum,
+            "specificity",
+            "predicted",
+            average,
+            warn_for,
+        )
+        sensitivity = _prf_divide(
+            tp_sum, true_sum, "sensitivity", "true", average, warn_for
+        )
+    return sensitivity, specificity
+
+
 @_deprecate_positional_args
 def sensitivity_specificity_support(
     y_true,
@@ -167,111 +185,41 @@ def sensitivity_specificity_support(
     warn_for=("sensitivity", "specificity"),
     sample_weight=None,
 ):
-    """Compute sensitivity, specificity, and support for each class
+    """Compute sensitivity, specificity, and support for each class.
 
-    The sensitivity is the ratio ``tp / (tp + fn)`` where ``tp`` is the number
-    of true positives and ``fn`` the number of false negatives. The sensitivity
-    quantifies the ability to avoid false negatives_[1].
-
-    The specificity is the ratio ``tn / (tn + fp)`` where ``tn`` is the number
-    of true negatives and ``fn`` the number of false negatives. The specificity
-    quantifies the ability to avoid false positives_[1].
-
-    The support is the number of occurrences of each class in ``y_true``.
-
-    If ``pos_label is None`` and in binary classification, this function
-    returns the average sensitivity and specificity if ``average``
-    is one of ``'weighted'``.
-
-    Read more in the `User Guide <https://imbalanced-learn.org/stable/metrics.html#sensitivity-specificity>`_.
+    The sensitivity is the ratio ``tp / (tp + fn)`` and the specificity
+    is the ratio ``tn / (tn + fp)``.
 
     Parameters
     ----------
     y_true : ndarray of shape (n_samples,)
-        Ground truth (correct) target values.
-
+        Ground truth target values.
     y_pred : ndarray of shape (n_samples,)
         Estimated targets as returned by a classifier.
-
     labels : list, default=None
-        The set of labels to include when ``average != 'binary'``, and their
-        order if ``average is None``. Labels present in the data can be
-        excluded, for example to calculate a multiclass average ignoring a
-        majority negative class, while labels not present in the data will
-        result in 0 components in a macro average. For multilabel targets,
-        labels are column indices. By default, all labels in ``y_true`` and
-        ``y_pred`` are used in sorted order.
-
+        The set of labels to include when ``average != 'binary'``.
     pos_label : str or int, default=1
         The class to report if ``average='binary'`` and the data is binary.
-        If the data are multiclass, this will be ignored;
-        setting ``labels=[pos_label]`` and ``average != 'binary'`` will report
-        scores for that label only.
-
     average : str, default=None
-        If ``None``, the scores for each class are returned. Otherwise, this
-        determines the type of averaging performed on the data:
-
-        ``'binary'``:
-            Only report results for the class specified by ``pos_label``.
-            This is applicable only if targets (``y_{true,pred}``) are binary.
-        ``'micro'``:
-            Calculate metrics globally by counting the total true positives,
-            false negatives and false positives.
-        ``'macro'``:
-            Calculate metrics for each label, and find their unweighted
-            mean.  This does not take label imbalance into account.
-        ``'weighted'``:
-            Calculate metrics for each label, and find their average, weighted
-            by support (the number of true instances for each label). This
-            alters 'macro' to account for label imbalance; it can result in an
-            F-score that is not between precision and recall.
-        ``'samples'``:
-            Calculate metrics for each instance, and find their average (only
-            meaningful for multilabel classification where this differs from
-            :func:`accuracy_score`).
-
-    warn_for : tuple or set of {{"sensitivity", "specificity"}}, for internal use
-        This determines which warnings will be made in the case that this
-        function is being used to return only one of its metrics.
-
+        Averaging method: ``'binary'``, ``'micro'``, ``'macro'``,
+        ``'weighted'``, ``'samples'``, or ``None``.
+    warn_for : tuple, default=("sensitivity", "specificity")
+        Determines which warnings will be made.
     sample_weight : ndarray of shape (n_samples,), default=None
         Sample weights.
 
     Returns
     -------
-    sensitivity : float (if `average is None`) or ndarray of \
-            shape (n_unique_labels,)
-        The sensitivity metric.
-
-    specificity : float (if `average is None`) or ndarray of \
-            shape (n_unique_labels,)
-        The specificity metric.
-
-    support : int (if `average is None`) or ndarray of \
-            shape (n_unique_labels,)
-        The number of occurrences of each label in ``y_true``.
+    sensitivity : float or ndarray
+    specificity : float or ndarray
+    support : int or ndarray
 
     References
     ----------
-    .. [1] `Wikipedia entry for the Sensitivity and specificity
-           <https://en.wikipedia.org/wiki/Sensitivity_and_specificity>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from imbens.metrics import sensitivity_specificity_support
-    >>> y_true = np.array(['cat', 'dog', 'pig', 'cat', 'dog', 'pig'])
-    >>> y_pred = np.array(['cat', 'pig', 'dog', 'cat', 'cat', 'dog'])
-    >>> sensitivity_specificity_support(y_true, y_pred, average='macro')
-    (0.33333333333333331, 0.66666666666666663, None)
-    >>> sensitivity_specificity_support(y_true, y_pred, average='micro')
-    (0.33333333333333331, 0.66666666666666663, None)
-    >>> sensitivity_specificity_support(y_true, y_pred, average='weighted')
-    (0.33333333333333331, 0.66666666666666663, None)
+    .. [1] Wikipedia entry for Sensitivity and specificity.
+    .. [2] https://imbalanced-learn.org/stable/metrics.html
     """
-    average_options = (None, "micro", "macro", "weighted", "samples")
-    _check_average_validity(average, average_options)
+    _check_average_validity(average, _AVERAGE_OPTIONS)
 
     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
     present_labels = unique_labels(y_true, y_pred)
@@ -292,18 +240,9 @@ def sensitivity_specificity_support(
         tp_sum, pred_sum, true_sum, tn_sum, average
     )
 
-    with np.errstate(divide="ignore", invalid="ignore"):
-        specificity = _prf_divide(
-            tn_sum,
-            tn_sum + pred_sum - tp_sum,
-            "specificity",
-            "predicted",
-            average,
-            warn_for,
-        )
-        sensitivity = _prf_divide(
-            tp_sum, true_sum, "sensitivity", "true", average, warn_for
-        )
+    sensitivity, specificity = _compute_sensitivity_specificity(
+        tn_sum, pred_sum, tp_sum, true_sum, average, warn_for
+    )
 
     sensitivity, specificity, true_sum = _compute_final_average(
         sensitivity, specificity, average, true_sum, sample_weight
