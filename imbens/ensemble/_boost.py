@@ -872,6 +872,124 @@ class ReweightBoostClassifier(
 
         return sample_weight, estimator_weight, estimator_error
 
+    def _validate_input_params(self):
+        if self.algorithm not in ("SAMME", "SAMME.R"):
+            raise ValueError("algorithm %s is not supported" % self.algorithm)
+        if self.learning_rate <= 0:
+            raise ValueError("learning_rate must be greater than zero")
+
+    def _get_data_type_config(self):
+        if self.estimator is None or isinstance(
+            self.estimator, (BaseDecisionTree, BaseForest)
+        ):
+            return np.float64, "csc"
+        return None, ["csr", "csc"]
+
+    def _validate_and_prepare_data(
+        self, X, y, dtype, accept_sparse, eval_datasets, eval_metrics, train_verbose
+    ):
+        check_x_y_args = {
+            "accept_sparse": accept_sparse,
+            "ensure_2d": True,
+            "allow_nd": True,
+            "dtype": dtype,
+            "y_numeric": False,
+        }
+        X, y = validate_data(self, X, y, **check_x_y_args)
+
+        self._train_state_.eval_datasets_ = check_eval_datasets(
+            eval_datasets, X, y, **check_x_y_args
+        )
+
+        raw_y = y.copy()
+        self.classes_, self._train_state_._y_encoded = np.unique(
+            y, return_inverse=True
+        )
+        self._train_state_._encode_map = {
+            c: np.where(self.classes_ == c)[0][0] for c in self.classes_
+        }
+        self.n_classes_ = len(self.classes_)
+
+        self._train_state_.origin_distr_ = dict(
+            Counter(self._train_state_._y_encoded)
+        )
+        self._train_state_.target_distr_ = dict(
+            Counter(self._train_state_._y_encoded)
+        )
+
+        self._train_state_.eval_metrics_ = check_eval_metrics(eval_metrics)
+
+        self._train_state_.train_verbose_ = check_train_verbose(
+            train_verbose, self.n_estimators, **self._properties
+        )
+
+        self._init_training_log_format()
+
+        return X, y, raw_y
+
+    def _init_sample_weight(self, sample_weight, X, y_encoded):
+        sample_weight = _check_sample_weight(sample_weight, X, np.float64)
+        sample_weight = self._preprocess_sample_weight(sample_weight, y_encoded)
+        sample_weight /= sample_weight.sum()
+        if np.any(sample_weight < 0):
+            raise ValueError("sample_weight cannot contain negative weights")
+
+        self._train_state_.raw_sample_weight_ = sample_weight
+
+        return copy(sample_weight)
+
+    def _init_cost_matrix(self, cost_matrix):
+        if cost_matrix is None:
+            cost_matrix = self._set_cost_matrix()
+        elif isinstance(cost_matrix, str):
+            cost_matrix = self._set_cost_matrix(how=cost_matrix)
+        cost_matrix = self._validate_cost_matrix(cost_matrix, self.n_classes_)
+        self._train_state_.cost_matrix_ = cost_matrix
+
+    def _init_ensemble(self):
+        self._validate_estimator()
+
+        random_state = check_random_state(self.random_state)
+
+        self.estimators_ = []
+        self.estimator_weights_ = np.zeros(self.n_estimators, dtype=np.float64)
+        self.estimator_errors_ = np.ones(self.n_estimators, dtype=np.float64)
+        self._train_state_.estimators_n_training_samples_ = np.zeros(
+            self.n_estimators, dtype=int
+        )
+
+        seeds = random_state.randint(MAX_INT, size=self.n_estimators)
+        self._train_state_._seeds = seeds
+
+        return random_state
+
+    def _check_early_stop(self, iboost, sample_weight, estimator_error, early_termination_):
+        if sample_weight is None and early_termination_:
+            print(
+                f"Training early-stop at iteration"
+                f" {iboost+1}/{self.n_estimators}"
+                f" (sample_weight is None)."
+            )
+            return True
+
+        if estimator_error == 0 and early_termination_:
+            print(
+                f"Training early-stop at iteration"
+                f" {iboost+1}/{self.n_estimators}"
+                f" (training error is 0)."
+            )
+            return True
+
+        if early_termination_ and np.sum(sample_weight) <= 0:
+            print(
+                f"Training early-stop at iteration"
+                f" {iboost+1}/{self.n_estimators}"
+                f" (sample_weight_sum <= 0)."
+            )
+            return True
+
+        return False
+
     @_deprecate_positional_args
     def _fit(
         self,
@@ -889,103 +1007,18 @@ class ReweightBoostClassifier(
             self._train_state_.early_termination, "early_termination", bool
         )
 
-        # Check that algorithm is supported.
-        if self.algorithm not in ("SAMME", "SAMME.R"):
-            raise ValueError("algorithm %s is not supported" % self.algorithm)
-
-        # Check parameters.
-        if self.learning_rate <= 0:
-            raise ValueError("learning_rate must be greater than zero")
-
-        if self.estimator == None or isinstance(
-            self.estimator, (BaseDecisionTree, BaseForest)
-        ):
-            DTYPE = np.float64  # from fast_dict.pxd
-            dtype = DTYPE
-            accept_sparse = "csc"
-        else:
-            dtype = None
-            accept_sparse = ["csr", "csc"]
-
-        check_x_y_args = {
-            "accept_sparse": accept_sparse,
-            "ensure_2d": True,
-            "allow_nd": True,
-            "dtype": dtype,
-            "y_numeric": False,
-        }
-        X, y = validate_data(self, X, y, **check_x_y_args)
-
-        # Check evaluation data
-        self._train_state_.eval_datasets_ = check_eval_datasets(
-            eval_datasets, X, y, **check_x_y_args
+        self._validate_input_params()
+        dtype, accept_sparse = self._get_data_type_config()
+        X, y, raw_y = self._validate_and_prepare_data(
+            X, y, dtype, accept_sparse, eval_datasets, eval_metrics, train_verbose
         )
-
-        raw_y = y.copy()
-        self.classes_, self._train_state_._y_encoded = np.unique(
-            y, return_inverse=True
+        sample_weight = self._init_sample_weight(
+            sample_weight, X, self._train_state_._y_encoded
         )
-        self._train_state_._encode_map = {
-            c: np.where(self.classes_ == c)[0][0] for c in self.classes_
-        }
-        self.n_classes_ = len(self.classes_)
-
-        # Store original class distribution
-        self._train_state_.origin_distr_ = dict(
-            Counter(self._train_state_._y_encoded)
-        )
-        self._train_state_.target_distr_ = dict(
-            Counter(self._train_state_._y_encoded)
-        )
-
-        self._train_state_.eval_metrics_ = check_eval_metrics(eval_metrics)
-
-        self._train_state_.train_verbose_ = check_train_verbose(
-            train_verbose, self.n_estimators, **self._properties
-        )
-
-        self._init_training_log_format()
-
-        # Check sample weight
-        sample_weight = _check_sample_weight(sample_weight, X, np.float64)
-        sample_weight = self._preprocess_sample_weight(
-            sample_weight, self._train_state_._y_encoded
-        )
-        sample_weight /= sample_weight.sum()
-        if np.any(sample_weight < 0):
-            raise ValueError("sample_weight cannot contain negative weights")
-
-        self._train_state_.raw_sample_weight_ = sample_weight
-
-        sample_weight = copy(self._train_state_.raw_sample_weight_)
-
-        # Initialize & validate cost matrix
-        if cost_matrix is None:
-            cost_matrix = self._set_cost_matrix()
-        elif isinstance(cost_matrix, str):
-            cost_matrix = self._set_cost_matrix(how=cost_matrix)
-        cost_matrix = self._validate_cost_matrix(cost_matrix, self.n_classes_)
-        self._train_state_.cost_matrix_ = cost_matrix
-
-        self._validate_estimator()
-
-        # Check random state
-        random_state = check_random_state(self.random_state)
-
-        # Clear any previous fit results.
-        self.estimators_ = []
-        self.estimator_weights_ = np.zeros(self.n_estimators, dtype=np.float64)
-        self.estimator_errors_ = np.ones(self.n_estimators, dtype=np.float64)
-        self._train_state_.estimators_n_training_samples_ = np.zeros(
-            self.n_estimators, dtype=int
-        )
-
-        # Genrate random seeds array
-        seeds = random_state.randint(MAX_INT, size=self.n_estimators)
-        self._train_state_._seeds = seeds
+        self._init_cost_matrix(cost_matrix)
+        random_state = self._init_ensemble()
 
         for iboost in range(self.n_estimators):
-            # Boosting step
             sample_weight, estimator_weight, estimator_error = self._boost(
                 iboost, X, raw_y, sample_weight, random_state
             )
@@ -994,40 +1027,16 @@ class ReweightBoostClassifier(
             self.estimator_errors_[iboost] = estimator_error
             self._train_state_.estimators_n_training_samples_[iboost] = y.shape[0]
 
-            # Print training infomation to console.
             self._training_log_to_console(iboost, y)
 
-            # Early termination.
-            if sample_weight is None and early_termination_:
-                print(
-                    f"Training early-stop at iteration"
-                    f" {iboost+1}/{self.n_estimators}"
-                    f" (sample_weight is None)."
-                )
-                break
-
-            # Stop if error is zero.
-            if estimator_error == 0 and early_termination_:
-                print(
-                    f"Training early-stop at iteration"
-                    f" {iboost+1}/{self.n_estimators}"
-                    f" (training error is 0)."
-                )
+            if self._check_early_stop(
+                iboost, sample_weight, estimator_error, early_termination_
+            ):
                 break
 
             sample_weight_sum = np.sum(sample_weight)
 
-            # Stop if the sum of sample weights has become non-positive.
-            if sample_weight_sum <= 0 and early_termination_:
-                print(
-                    f"Training early-stop at iteration"
-                    f" {iboost+1}/{self.n_estimators}"
-                    f" (sample_weight_sum <= 0)."
-                )
-                break
-
             if iboost < self.n_estimators - 1:
-                # Normalize.
                 sample_weight /= sample_weight_sum
 
         return self
