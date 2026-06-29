@@ -55,6 +55,7 @@ else:  # pragma: no cover
 import itertools
 import numbers
 from abc import ABCMeta, abstractmethod
+from types import SimpleNamespace
 from warnings import warn
 
 import numpy as np
@@ -200,6 +201,69 @@ class ResampleBaggingClassifier(
         "training_type": _training_type,
     }
 
+    # --- Properties for backward compatibility ---
+    # (store data internally in _sampler_cfg / _train_state)
+
+    @property
+    def sampling_strategy(self):
+        return self._sampler_cfg.sampling_strategy
+
+    @sampling_strategy.setter
+    def sampling_strategy(self, value):
+        self._sampler_cfg.sampling_strategy = value
+
+    @property
+    def _sampling_type(self):
+        return self._sampler_cfg.sampling_type
+
+    @_sampling_type.setter
+    def _sampling_type(self, value):
+        self._sampler_cfg.sampling_type = value
+
+    @property
+    def _max_samples(self):
+        if hasattr(self, '_train_state'):
+            return self._train_state.max_samples
+        return None
+
+    @property
+    def _max_features(self):
+        if hasattr(self, '_train_state'):
+            return self._train_state.max_features
+        return None
+
+    @property
+    def _n_samples(self):
+        if hasattr(self, '_train_state'):
+            return self._train_state.n_samples
+        return None
+
+    @property
+    def _seeds(self):
+        return self._train_state.seeds
+
+    @_seeds.setter
+    def _seeds(self, value):
+        self._train_state.seeds = value
+
+    @property
+    def eval_datasets_(self):
+        if not hasattr(self, '_train_state'):
+            return {}
+        return self._train_state.eval_datasets
+
+    @property
+    def eval_metrics_(self):
+        if not hasattr(self, '_train_state'):
+            return {}
+        return self._train_state.eval_metrics
+
+    @property
+    def train_verbose_(self):
+        if not hasattr(self, '_train_state'):
+            return None
+        return self._train_state.train_verbose
+
     @_deprecate_positional_args
     def __init__(
         self,
@@ -220,9 +284,11 @@ class ResampleBaggingClassifier(
         verbose=0,
     ):
 
-        self.sampling_strategy = sampling_strategy
-        self._sampling_type = sampling_type
-        self.sampler = sampler
+        self._sampler_cfg = SimpleNamespace(
+            sampler=sampler,
+            sampling_type=sampling_type,
+            sampling_strategy=sampling_strategy,
+        )
 
         super().__init__(
             estimator=estimator,
@@ -242,19 +308,19 @@ class ResampleBaggingClassifier(
         """Validate the label vector."""
         y_encoded = super()._validate_y(y)
         if (
-            isinstance(self.sampling_strategy, dict)
-            and self.sampler_._sampling_type != "bypass"
+            isinstance(self._sampler_cfg.sampling_strategy, dict)
+            and self._sampler_cfg.sampler_._sampling_type != "bypass"
         ):
-            self._sampling_strategy = {
+            self._sampler_cfg.internal_sampling_strategy = {
                 np.where(self.classes_ == key)[0][0]: value
                 for key, value in check_sampling_strategy(
-                    self.sampling_strategy,
+                    self._sampler_cfg.sampling_strategy,
                     y,
-                    self.sampler_._sampling_type,
+                    self._sampler_cfg.sampler_._sampling_type,
                 ).items()
             }
         else:
-            self._sampling_strategy = self.sampling_strategy
+            self._sampler_cfg.internal_sampling_strategy = self._sampler_cfg.sampling_strategy
         return y_encoded
 
     def _validate_estimator(self, default=DecisionTreeClassifier()):
@@ -276,9 +342,9 @@ class ResampleBaggingClassifier(
             estimator = clone(default)
 
         # validate sampler and sampler_kwargs
-        # validated sampler stored in self.sampler_
+        # validated sampler stored in _sampler_cfg.sampler_
         try:
-            self.sampler_ = clone(self.sampler)
+            self._sampler_cfg.sampler_ = clone(self._sampler_cfg.sampler)
         except Exception as e:
             e_args = list(e.args)
             e_args[0] = (
@@ -287,12 +353,14 @@ class ResampleBaggingClassifier(
             e.args = tuple(e_args)
             raise e
 
-        if self.sampler_._sampling_type != "bypass":
-            self.sampler_.set_params(sampling_strategy=self._sampling_strategy)
-            self.sampler_.set_params(**self.sampler_kwargs_)
+        if self._sampler_cfg.sampler_._sampling_type != "bypass":
+            self._sampler_cfg.sampler_.set_params(
+                sampling_strategy=self._sampler_cfg.internal_sampling_strategy
+            )
+            self._sampler_cfg.sampler_.set_params(**self._sampler_cfg.sampler_kwargs)
 
         self._estimator = Pipeline(
-            [("sampler", self.sampler_), ("classifier", estimator)]
+            [("sampler", self._sampler_cfg.sampler_), ("classifier", estimator)]
         )
         try:
             # scikit-learn < 1.2
@@ -356,7 +424,10 @@ class ResampleBaggingClassifier(
         # Check data, sampler_kwargs and random_state
         check_target_type(y)
 
-        self.sampler_kwargs_ = check_type(sampler_kwargs, "sampler_kwargs", dict)
+        self._train_state = SimpleNamespace()
+        self._sampler_cfg.sampler_kwargs = check_type(
+            sampler_kwargs, "sampler_kwargs", dict
+        )
 
         random_state = check_random_state(self.random_state)
 
@@ -370,13 +441,13 @@ class ResampleBaggingClassifier(
         X, y = validate_data(self, X, y, **check_x_y_args)
 
         # Check evaluation data
-        self.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
+        self._train_state.eval_datasets = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
 
         # Check evaluation metrics
-        self.eval_metrics_ = check_eval_metrics(eval_metrics)
+        self._train_state.eval_metrics = check_eval_metrics(eval_metrics)
 
         # Check verbose
-        self.train_verbose_ = check_train_verbose(
+        self._train_state.train_verbose = check_train_verbose(
             train_verbose, self.n_estimators, **self._properties
         )
         self._init_training_log_format()
@@ -385,8 +456,8 @@ class ResampleBaggingClassifier(
             sample_weight = _check_sample_weight(sample_weight, X, dtype=None)
 
         # Remap output
-        n_samples, self.n_features_in_ = X.shape
-        self._n_samples = n_samples
+        n_samples = X.shape[0]
+        self._train_state.n_samples = n_samples
         y = self._validate_y(y)
 
         # Check parameters
@@ -402,7 +473,7 @@ class ResampleBaggingClassifier(
             raise ValueError("max_samples must be in (0, n_samples]")
 
         # Store validated integer row sampling value
-        self._max_samples = max_samples
+        self._train_state.max_samples = max_samples
 
         # Validate max_features
         if isinstance(self.max_features, numbers.Integral):
@@ -418,7 +489,7 @@ class ResampleBaggingClassifier(
         max_features = max(1, int(max_features))
 
         # Store validated integer feature sampling value
-        self._max_features = max_features
+        self._train_state.max_features = max_features
 
         # Other checks
         if not self.bootstrap and self.oob_score:
@@ -468,7 +539,7 @@ class ResampleBaggingClassifier(
             random_state.randint(MAX_INT, size=len(self.estimators_))
 
         seeds = random_state.randint(MAX_INT, size=n_more_estimators)
-        self._seeds = seeds
+        self._train_state.seeds = seeds
 
         all_results = Parallel(
             n_jobs=n_jobs, verbose=self.verbose, **self._parallel_args()
