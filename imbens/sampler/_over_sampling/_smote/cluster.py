@@ -249,6 +249,49 @@ class KMeansSMOTE(BaseSMOTE):
 
         return valid_clusters, np.array(cluster_sparsities)
 
+    def _sample_from_cluster(
+        self, X, y, valid_cluster_idx, valid_cluster, class_sample,
+        n_samples, cluster_n_samples_list, cluster_weights,
+        X_resampled, y_resampled
+    ):
+        X_cluster = _safe_indexing(X, valid_cluster)
+        y_cluster = _safe_indexing(y, valid_cluster)
+
+        X_cluster_class = _safe_indexing(
+            X_cluster, np.flatnonzero(y_cluster == class_sample)
+        )
+
+        self.nn_k_.fit(X_cluster_class)
+        nns = self.nn_k_.kneighbors(X_cluster_class, return_distance=False)[
+            :, 1:
+        ]
+
+        cluster_n_samples = (
+            int(n_samples - sum(cluster_n_samples_list))
+            if valid_cluster_idx == self.kmeans_estimator_.n_clusters - 1
+            else math.floor(
+                n_samples * cluster_weights[valid_cluster_idx]
+            )
+        )
+
+        cluster_n_samples_list[valid_cluster_idx] = cluster_n_samples
+
+        X_new, y_new = self._make_samples(
+            X_cluster_class,
+            y.dtype,
+            class_sample,
+            X_cluster_class,
+            nns,
+            cluster_n_samples,
+            1.0,
+        )
+
+        stack = [np.vstack, sparse.vstack][int(sparse.issparse(X_new))]
+        X_resampled = stack((X_resampled, X_new))
+        y_resampled = np.hstack((y_resampled, y_new))
+
+        return X_resampled, y_resampled
+
     def _fit_resample(self, X, y, sample_weight=None):
         self._validate_estimator()
         X_resampled = X.copy()
@@ -278,46 +321,24 @@ class KMeansSMOTE(BaseSMOTE):
                 )
 
             for valid_cluster_idx, valid_cluster in enumerate(valid_clusters):
-                X_cluster = _safe_indexing(X, valid_cluster)
-                y_cluster = _safe_indexing(y, valid_cluster)
-
-                X_cluster_class = _safe_indexing(
-                    X_cluster, np.flatnonzero(y_cluster == class_sample)
+                X_resampled, y_resampled = self._sample_from_cluster(
+                    X, y, valid_cluster_idx, valid_cluster, class_sample,
+                    n_samples, cluster_n_samples_list, cluster_weights,
+                    X_resampled, y_resampled
                 )
 
-                self.nn_k_.fit(X_cluster_class)
-                nns = self.nn_k_.kneighbors(X_cluster_class, return_distance=False)[
-                    :, 1:
-                ]
+        return self._handle_sample_weight(
+            sample_weight, X_resampled, y_resampled, y
+        )
 
-                cluster_n_samples = (
-                    int(n_samples - sum(cluster_n_samples_list))
-                    if valid_cluster_idx == self.kmeans_estimator_.n_clusters - 1
-                    else math.floor(
-                        n_samples * cluster_weights[valid_cluster_idx]
-                    )
-                )
-                cluster_n_samples_list[valid_cluster_idx] = cluster_n_samples
-
-                X_new, y_new = self._make_samples(
-                    X_cluster_class,
-                    y.dtype,
-                    class_sample,
-                    X_cluster_class,
-                    nns,
-                    cluster_n_samples,
-                    1.0,
-                )
-
-                stack = [np.vstack, sparse.vstack][int(sparse.issparse(X_new))]
-                X_resampled = stack((X_resampled, X_new))
-                y_resampled = np.hstack((y_resampled, y_new))
-        
+    def _handle_sample_weight(self, sample_weight, X_resampled, y_resampled, y):
         if sample_weight is not None:
             sample_weight_new = \
                 np.empty(y_resampled.shape[0] - y.shape[0], dtype=np.float64)
             sample_weight_new[:] = np.mean(sample_weight)
-            sample_weight_resampled = np.hstack([sample_weight, sample_weight_new]).reshape(-1, 1)
+            sample_weight_resampled = np.hstack(
+                [sample_weight, sample_weight_new]
+            ).reshape(-1, 1)
             sample_weight_resampled = \
                 np.squeeze(normalize(sample_weight_resampled, axis=0, norm='l1'))
             return X_resampled, y_resampled, sample_weight_resampled
