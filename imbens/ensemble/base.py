@@ -171,6 +171,19 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
         """
         return self._train_state_ if hasattr(self, '_train_state_') else self
 
+    def _compute_metrics(self, y_eval, y_predict_proba, eval_metrics, classes_):
+        scores = {}
+        for metric_name, (metric_func, kwargs, ac_proba, ac_labels) in eval_metrics.items():
+            if ac_labels:
+                kwargs["labels"] = classes_
+            if ac_proba:
+                score = metric_func(y_eval, y_predict_proba, **kwargs)
+            else:
+                y_predict = classes_.take(np.argmax(y_predict_proba, axis=1), axis=0)
+                score = metric_func(y_eval, y_predict, **kwargs)
+            scores[metric_name] = score
+        return scores
+
     def _evaluate(
         self,
         dataset_name: str,
@@ -183,48 +196,24 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
         """
 
         ts = self._get_ts()
-        eval_datasets_ = ts.eval_datasets_
-        classes_ = self.classes_
-        verbose_format_ = ts.train_verbose_format_
-
-        # Temporarily disable verbose
         support_verbose = hasattr(self, "verbose")
         if support_verbose:
             verbose, self.verbose = self.verbose, 0
 
-        # If no eval_metrics is given, use self._train_state_.eval_metrics_
-        if eval_metrics == None:
+        if eval_metrics is None:
             eval_metrics = ts.eval_metrics_
 
-        # If return numerical results
-        if return_value_dict == True:
+        if return_value_dict:
             value_dict = {}
-            for data_name, (X_eval, y_eval) in eval_datasets_.items():
+            for data_name, (X_eval, y_eval) in ts.eval_datasets_.items():
                 y_predict_proba = self.predict_proba(X_eval)
-                data_value_dict = {}
-                for metric_name, (
-                    metric_func,
-                    kwargs,
-                    ac_proba,
-                    ac_labels,
-                ) in eval_metrics.items():
-                    if ac_labels:
-                        kwargs["labels"] = classes_
-                    if ac_proba:  # If the metric take predict probabilities
-                        score = metric_func(y_eval, y_predict_proba, **kwargs)
-                    else:  # If the metric do not take predict probabilities
-                        y_predict = classes_.take(
-                            np.argmax(y_predict_proba, axis=1), axis=0
-                        )
-                        score = metric_func(y_eval, y_predict, **kwargs)
-                    data_value_dict[metric_name] = score
-                value_dict[data_name] = data_value_dict
+                value_dict[data_name] = self._compute_metrics(
+                    y_eval, y_predict_proba, eval_metrics, self.classes_
+                )
             out = value_dict
-
-        # If return string
         else:
             eval_info = ""
-            if return_header == True:
+            if return_header:
                 for metric_name in eval_metrics.keys():
                     eval_info = self._training_log_add_block(
                         eval_info,
@@ -232,39 +221,27 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
                         "",
                         "",
                         " ",
-                        verbose_format_["len_metrics"][metric_name],
+                        ts.train_verbose_format_["len_metrics"][metric_name],
                         strip=False,
                     )
             else:
-                (X_eval, y_eval) = eval_datasets_[dataset_name]
+                X_eval, y_eval = ts.eval_datasets_[dataset_name]
                 y_predict_proba = self.predict_proba(X_eval)
-                for metric_name, (
-                    metric_func,
-                    kwargs,
-                    ac_proba,
-                    ac_labels,
-                ) in eval_metrics.items():
-                    if ac_labels:
-                        kwargs["labels"] = classes_
-                    if ac_proba:  # If the metric take predict probabilities
-                        score = metric_func(y_eval, y_predict_proba, **kwargs)
-                    else:  # If the metric do not take predict probabilities
-                        y_predict = classes_.take(
-                            np.argmax(y_predict_proba, axis=1), axis=0
-                        )
-                        score = metric_func(y_eval, y_predict, **kwargs)
+                metrics = self._compute_metrics(
+                    y_eval, y_predict_proba, eval_metrics, self.classes_
+                )
+                for metric_name in eval_metrics.keys():
                     eval_info = self._training_log_add_block(
                         eval_info,
-                        "{:.3f}".format(score),
+                        "{:.3f}".format(metrics[metric_name]),
                         "",
                         "",
                         " ",
-                        verbose_format_["len_metrics"][metric_name],
+                        ts.train_verbose_format_["len_metrics"][metric_name],
                         strip=False,
                     )
             out = eval_info[:-1]
 
-        # Recover verbose state
         if support_verbose:
             self.verbose = verbose
 
