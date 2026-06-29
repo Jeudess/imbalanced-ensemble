@@ -38,6 +38,124 @@ from sklearn.utils.multiclass import unique_labels
 from sklearn.utils.validation import check_consistent_length, column_or_1d
 
 
+def _check_average_validity(average, average_options):
+    if average not in average_options and average != "binary":
+        raise ValueError("average has to be one of " + str(average_options))
+
+
+def _handle_binary_average(average, y_type, pos_label, present_labels, labels):
+    if average == "binary":
+        if y_type == "binary":
+            if pos_label not in present_labels:
+                if len(present_labels) < 2:
+                    return True, (0.0, 0.0, 0), None
+                raise ValueError(
+                    "pos_label=%r is not a valid label: %r"
+                    % (pos_label, present_labels)
+                )
+            return False, None, [pos_label]
+        raise ValueError(
+            "Target is %s but average='binary'. Please "
+            "choose another average setting." % y_type
+        )
+    elif pos_label not in (None, 1):
+        warnings.warn(
+            "Note that pos_label (set to %r) is ignored when "
+            "average != 'binary' (got %r). You may use "
+            "labels=[pos_label] to specify a single positive class."
+            % (pos_label, average),
+            UserWarning,
+        )
+    return False, None, labels
+
+
+def _resolve_labels(labels, present_labels):
+    if labels is None:
+        return present_labels, None
+    n_labels = len(labels)
+    labels = np.hstack(
+        [labels, np.setdiff1d(present_labels, labels, assume_unique=True)]
+    )
+    return labels, n_labels
+
+
+def _compute_confusion_statistics(
+    y_true, y_pred, labels, n_labels, y_type, average, sample_weight
+):
+    if y_type.startswith("multilabel"):
+        raise ValueError("imblearn does not support multilabel")
+    elif average == "samples":
+        raise ValueError(
+            "Sample-based precision, recall, fscore is "
+            "not meaningful outside multilabel "
+            "classification. See the accuracy_score instead."
+        )
+
+    le = LabelEncoder()
+    le.fit(labels)
+    y_true = le.transform(y_true)
+    y_pred = le.transform(y_pred)
+    sorted_labels = le.classes_
+
+    tp = y_true == y_pred
+    tp_bins = y_true[tp]
+    if sample_weight is not None:
+        tp_bins_weights = np.asarray(sample_weight)[tp]
+    else:
+        tp_bins_weights = None
+
+    if len(tp_bins):
+        tp_sum = np.bincount(
+            tp_bins, weights=tp_bins_weights, minlength=len(labels)
+        )
+    else:
+        true_sum = pred_sum = tp_sum = np.zeros(len(labels))
+    if len(y_pred):
+        pred_sum = np.bincount(y_pred, weights=sample_weight, minlength=len(labels))
+    if len(y_true):
+        true_sum = np.bincount(y_true, weights=sample_weight, minlength=len(labels))
+
+    tn_sum = y_true.size - (pred_sum + true_sum - tp_sum)
+
+    indices = np.searchsorted(sorted_labels, labels[:n_labels])
+    tp_sum = tp_sum[indices]
+    true_sum = true_sum[indices]
+    pred_sum = pred_sum[indices]
+    tn_sum = tn_sum[indices]
+
+    return tp_sum, pred_sum, true_sum, tn_sum
+
+
+def _apply_micro_average(tp_sum, pred_sum, true_sum, tn_sum, average):
+    if average == "micro":
+        tp_sum = np.array([tp_sum.sum()])
+        pred_sum = np.array([pred_sum.sum()])
+        true_sum = np.array([true_sum.sum()])
+        tn_sum = np.array([tn_sum.sum()])
+    return tp_sum, pred_sum, true_sum, tn_sum
+
+
+def _compute_final_average(
+    sensitivity, specificity, average, true_sum, sample_weight
+):
+    if average == "weighted":
+        weights = true_sum
+        if weights.sum() == 0:
+            return 0, 0, None
+    elif average == "samples":
+        weights = sample_weight
+    else:
+        weights = None
+
+    if average is not None:
+        assert average != "binary" or len(specificity) == 1
+        specificity = np.average(specificity, weights=weights)
+        sensitivity = np.average(sensitivity, weights=weights)
+        true_sum = None
+
+    return sensitivity, specificity, true_sum
+
+
 @_deprecate_positional_args
 def sensitivity_specificity_support(
     y_true,
@@ -153,107 +271,28 @@ def sensitivity_specificity_support(
     (0.33333333333333331, 0.66666666666666663, None)
     """
     average_options = (None, "micro", "macro", "weighted", "samples")
-    if average not in average_options and average != "binary":
-        raise ValueError("average has to be one of " + str(average_options))
+    _check_average_validity(average, average_options)
 
     y_type, y_true, y_pred = _check_targets(y_true, y_pred)
     present_labels = unique_labels(y_true, y_pred)
 
-    if average == "binary":
-        if y_type == "binary":
-            if pos_label not in present_labels:
-                if len(present_labels) < 2:
-                    # Only negative labels
-                    return (0.0, 0.0, 0)
-                else:
-                    raise ValueError(
-                        "pos_label=%r is not a valid label: %r"
-                        % (pos_label, present_labels)
-                    )
-            labels = [pos_label]
-        else:
-            raise ValueError(
-                "Target is %s but average='binary'. Please "
-                "choose another average setting." % y_type
-            )
-    elif pos_label not in (None, 1):
-        warnings.warn(
-            "Note that pos_label (set to %r) is ignored when "
-            "average != 'binary' (got %r). You may use "
-            "labels=[pos_label] to specify a single positive class."
-            % (pos_label, average),
-            UserWarning,
-        )
+    early_return, result, labels = _handle_binary_average(
+        average, y_type, pos_label, present_labels, labels
+    )
+    if early_return:
+        return result
 
-    if labels is None:
-        labels = present_labels
-        n_labels = None
-    else:
-        n_labels = len(labels)
-        labels = np.hstack(
-            [labels, np.setdiff1d(present_labels, labels, assume_unique=True)]
-        )
+    labels, n_labels = _resolve_labels(labels, present_labels)
 
-    # Calculate tp_sum, pred_sum, true_sum ###
+    tp_sum, pred_sum, true_sum, tn_sum = _compute_confusion_statistics(
+        y_true, y_pred, labels, n_labels, y_type, average, sample_weight
+    )
 
-    if y_type.startswith("multilabel"):
-        raise ValueError("imblearn does not support multilabel")
-    elif average == "samples":
-        raise ValueError(
-            "Sample-based precision, recall, fscore is "
-            "not meaningful outside multilabel "
-            "classification. See the accuracy_score instead."
-        )
-    else:
-        le = LabelEncoder()
-        le.fit(labels)
-        y_true = le.transform(y_true)
-        y_pred = le.transform(y_pred)
-        sorted_labels = le.classes_
-
-        # labels are now from 0 to len(labels) - 1 -> use bincount
-        tp = y_true == y_pred
-        tp_bins = y_true[tp]
-        if sample_weight is not None:
-            tp_bins_weights = np.asarray(sample_weight)[tp]
-        else:
-            tp_bins_weights = None
-
-        if len(tp_bins):
-            tp_sum = np.bincount(
-                tp_bins, weights=tp_bins_weights, minlength=len(labels)
-            )
-        else:
-            # Pathological case
-            true_sum = pred_sum = tp_sum = np.zeros(len(labels))
-        if len(y_pred):
-            pred_sum = np.bincount(y_pred, weights=sample_weight, minlength=len(labels))
-        if len(y_true):
-            true_sum = np.bincount(y_true, weights=sample_weight, minlength=len(labels))
-
-        # Compute the true negative
-        tn_sum = y_true.size - (pred_sum + true_sum - tp_sum)
-
-        # Retain only selected labels
-        indices = np.searchsorted(sorted_labels, labels[:n_labels])
-        tp_sum = tp_sum[indices]
-        true_sum = true_sum[indices]
-        pred_sum = pred_sum[indices]
-        tn_sum = tn_sum[indices]
-
-    if average == "micro":
-        tp_sum = np.array([tp_sum.sum()])
-        pred_sum = np.array([pred_sum.sum()])
-        true_sum = np.array([true_sum.sum()])
-        tn_sum = np.array([tn_sum.sum()])
-
-    # Finally, we have all our sufficient statistics. Divide! #
+    tp_sum, pred_sum, true_sum, tn_sum = _apply_micro_average(
+        tp_sum, pred_sum, true_sum, tn_sum, average
+    )
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        # Divide, and on zero-division, set scores to 0 and warn:
-
-        # Oddly, we may get an "invalid" rather than a "divide" error
-        # here.
         specificity = _prf_divide(
             tn_sum,
             tn_sum + pred_sum - tp_sum,
@@ -266,22 +305,9 @@ def sensitivity_specificity_support(
             tp_sum, true_sum, "sensitivity", "true", average, warn_for
         )
 
-    # Average the results
-
-    if average == "weighted":
-        weights = true_sum
-        if weights.sum() == 0:
-            return 0, 0, None
-    elif average == "samples":
-        weights = sample_weight
-    else:
-        weights = None
-
-    if average is not None:
-        assert average != "binary" or len(specificity) == 1
-        specificity = np.average(specificity, weights=weights)
-        sensitivity = np.average(sensitivity, weights=weights)
-        true_sum = None  # return no support
+    sensitivity, specificity, true_sum = _compute_final_average(
+        sensitivity, specificity, average, true_sum, sample_weight
+    )
 
     return sensitivity, specificity, true_sum
 
