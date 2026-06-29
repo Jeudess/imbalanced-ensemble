@@ -236,7 +236,7 @@ class AdaUBoostClassifier(ReweightBoostClassifier):
 
         classes, origin_distr = (
             self._train_state_._encode_map.values(),
-            self.origin_distr_,
+            self._train_state_.origin_distr_,
         )
         c_maj = max(origin_distr.keys(), key=(lambda x: origin_distr[x]))
         beta = [origin_distr[c_maj] / origin_distr[c_min] for c_min in classes]

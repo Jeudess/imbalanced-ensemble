@@ -81,6 +81,15 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
 
     _estimator_ensemble_type = "imbens_classifier"
 
+    def _get_ts(self):
+        """Return the training state container if available, else self.
+
+        Allows the mixin methods to work with classes that use
+        _TrainingState (ReweightBoostClassifier hierarchy) and those
+        that store attributes directly on self.
+        """
+        return self._train_state_ if hasattr(self, '_train_state_') else self
+
     def _evaluate(
         self,
         dataset_name: str,
@@ -92,18 +101,19 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
         ensemble training process.
         """
 
-        eval_datasets_ = self.eval_datasets_
+        ts = self._get_ts()
+        eval_datasets_ = ts.eval_datasets_
         classes_ = self.classes_
-        verbose_format_ = self.train_verbose_format_
+        verbose_format_ = ts.train_verbose_format_
 
         # Temporarily disable verbose
         support_verbose = hasattr(self, "verbose")
         if support_verbose:
             verbose, self.verbose = self.verbose, 0
 
-        # If no eval_metrics is given, use self.eval_metrics_
+        # If no eval_metrics is given, use self._train_state_.eval_metrics_
         if eval_metrics == None:
-            eval_metrics = self.eval_metrics_
+            eval_metrics = ts.eval_metrics_
 
         # If return numerical results
         if return_value_dict == True:
@@ -182,16 +192,17 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
     def _init_training_log_format(self):
         """Private function for initialization of the training verbose format"""
 
-        if self.train_verbose_:
+        ts = self._get_ts()
+        if ts.train_verbose_:
             len_iter = (
                 max(len(str(self.n_estimators)), len(TRAINING_LOG_HEAD_TITLES["iter"]))
                 + 2
             )
-            if self.train_verbose_["print_distribution"]:
+            if ts.train_verbose_["print_distribution"]:
                 len_class_distr = (
                     max(
-                        len(str(self.target_distr_)),
-                        len(str(self.origin_distr_)),
+                        len(str(ts.target_distr_)),
+                        len(str(ts.origin_distr_)),
                         len(TRAINING_LOG_HEAD_TITLES["class_distr"]),
                     )
                     + 2
@@ -200,16 +211,16 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
                 len_class_distr = 0
             len_metrics = {
                 metric_name: max(len(metric_name), 5) + 2
-                for metric_name in self.eval_metrics_.keys()
+                for metric_name in ts.eval_metrics_.keys()
             }
             metrics_total_length = sum(len_metrics.values()) + len(len_metrics) - 1
             len_datasets = {
                 dataset_name: max(
                     metrics_total_length, len("Data: " + dataset_name) + 2
                 )
-                for dataset_name in self.eval_datasets_.keys()
+                for dataset_name in ts.eval_datasets_.keys()
             }
-            self.train_verbose_format_ = {
+            ts.train_verbose_format_ = {
                 "len_iter": len_iter,
                 "len_class_distr": len_class_distr,
                 "len_metrics": len_metrics,
@@ -235,21 +246,26 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
     ):
         """Private function for adding a line to training log."""
 
+        ts = self._get_ts()
         if texts == None:
-            texts = ("", "", tuple("" for _ in self.eval_datasets_.keys()))
+            texts = (
+                "",
+                "",
+                tuple("" for _ in ts.eval_datasets_.keys()),
+            )
         if tabs == None:
             tabs = ("┃", "┃", "┃", " ")
         if widths == None:
             widths = (
-                self.train_verbose_format_["len_iter"],
-                self.train_verbose_format_["len_class_distr"],
-                tuple(self.train_verbose_format_["len_datasets"].values()),
+                ts.train_verbose_format_["len_iter"],
+                ts.train_verbose_format_["len_class_distr"],
+                tuple(ts.train_verbose_format_["len_datasets"].values()),
             )
         if flags == None:
             flags = (
                 True,
-                self.train_verbose_["print_distribution"],
-                self.train_verbose_["print_metrics"],
+                ts.train_verbose_["print_distribution"],
+                ts.train_verbose_["print_metrics"],
             )
         (sta_char, mid_char, end_char, fill_char) = tabs
         (flag_iter, flag_distr, flag_metric) = flags
@@ -274,6 +290,7 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
     def _training_log_to_console_head(self):
         """Private function for printing a table header."""
 
+        ts = self._get_ts()
         # line 1
         info = (
             self._training_log_add_line(
@@ -289,7 +306,8 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
                     "",
                     "",
                     tuple(
-                        "Data: " + data_name for data_name in self.eval_datasets_.keys()
+                        "Data: " + data_name
+                        for data_name in ts.eval_datasets_.keys()
                     ),
                 ),
             )
@@ -302,7 +320,9 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
                 texts=(
                     TRAINING_LOG_HEAD_TITLES["iter"],
                     TRAINING_LOG_HEAD_TITLES["class_distr"],
-                    tuple("Metric" for data_name in self.eval_datasets_.keys()),
+                    tuple(
+                        "Metric" for data_name in ts.eval_datasets_.keys()
+                    ),
                 ),
             )
             + "\n"
@@ -316,7 +336,7 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
                     "",
                     tuple(
                         self._evaluate("", return_header=True)
-                        for data_name in self.eval_datasets_.keys()
+                        for data_name in ts.eval_datasets_.keys()
                     ),
                 ),
             )
@@ -330,7 +350,7 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
     def _training_log_to_console(self, i_iter=None, y=None):
         """Private function for printing training log to sys.stdout."""
 
-        if self.train_verbose_:
+        if self._get_ts().train_verbose_:
 
             if not hasattr(self, "_properties"):
                 raise AttributeError(
@@ -361,9 +381,10 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
         if i_iter == 0:
             print(self._training_log_to_console_head())
 
-        eval_data_names = self.eval_datasets_.keys()
+        ts = self._get_ts()
+        eval_data_names = ts.eval_datasets_.keys()
 
-        if (i_iter + 1) % self.train_verbose_["granularity"] == 0 or i_iter == 0:
+        if (i_iter + 1) % ts.train_verbose_["granularity"] == 0 or i_iter == 0:
             print(
                 self._training_log_add_line(
                     texts=(
@@ -395,7 +416,7 @@ class ImbalancedEnsembleClassifierMixin(ClassifierMixin):
         """Private function for printing training log to sys.stdout.
         (for ensemble classifiers that train in a parallel manner)"""
 
-        eval_data_names = self.eval_datasets_.keys()
+        eval_data_names = self._get_ts().eval_datasets_.keys()
         print(self._training_log_to_console_head())
         print(
             self._training_log_add_line(

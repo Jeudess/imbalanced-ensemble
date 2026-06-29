@@ -58,7 +58,7 @@ from sklearn.utils.validation import _check_sample_weight, validate_data
 _super = AdaBoostClassifier
 
 
-class _TrainingState:
+class _TrainingState:  # pylint: disable=too-many-instance-attributes
     """Container for internal training state attributes.
 
     Groups fit-time internal attributes to reduce the number of
@@ -72,6 +72,15 @@ class _TrainingState:
         'sampler_kwargs_',
         'balancing_schedule_',
         '_encode_map',
+        'origin_distr_',
+        'target_distr_',
+        'eval_datasets_',
+        'eval_metrics_',
+        'train_verbose_',
+        'train_verbose_format_',
+        'cost_matrix_',
+        'estimators_n_training_samples_',
+        'early_termination',
     )
 
     def __init__(
@@ -82,6 +91,15 @@ class _TrainingState:
         sampler_kwargs_=None,
         balancing_schedule_=None,
         _encode_map=None,
+        origin_distr_=None,
+        target_distr_=None,
+        eval_datasets_=None,
+        eval_metrics_=None,
+        train_verbose_=None,
+        train_verbose_format_=None,
+        cost_matrix_=None,
+        estimators_n_training_samples_=None,
+        early_termination=None,
     ):
         self._y_encoded = _y_encoded
         self._seeds = _seeds
@@ -89,6 +107,15 @@ class _TrainingState:
         self.sampler_kwargs_ = sampler_kwargs_
         self.balancing_schedule_ = balancing_schedule_
         self._encode_map = _encode_map
+        self.origin_distr_ = origin_distr_
+        self.target_distr_ = target_distr_
+        self.eval_datasets_ = eval_datasets_
+        self.eval_metrics_ = eval_metrics_
+        self.train_verbose_ = train_verbose_
+        self.train_verbose_format_ = train_verbose_format_
+        self.cost_matrix_ = cost_matrix_
+        self.estimators_n_training_samples_ = estimators_n_training_samples_
+        self.early_termination = early_termination
 
 
 class ResampleBoostClassifier(  # pylint: disable=too-many-instance-attributes
@@ -437,7 +464,9 @@ class ResampleBoostClassifier(  # pylint: disable=too-many-instance-attributes
         X, y = validate_data(self, X, y, **check_x_y_args)
 
         # Check evaluation data
-        self.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
+        self._train_state_.eval_datasets_ = check_eval_datasets(
+            eval_datasets, X, y, **check_x_y_args
+        )
 
         self.classes_, self._train_state_._y_encoded = np.unique(
             y, return_inverse=True
@@ -445,10 +474,10 @@ class ResampleBoostClassifier(  # pylint: disable=too-many-instance-attributes
         self.n_classes_ = len(self.classes_)
 
         # Store original class distribution
-        self.origin_distr_ = dict(Counter(y))
+        self._train_state_.origin_distr_ = dict(Counter(y))
         (
             self.target_label_,
-            self.target_distr_,
+            self._train_state_.target_distr_,
         ) = check_target_label_and_n_target_samples(
             y, target_label, n_target_samples, self._sampling_type
         )
@@ -457,9 +486,9 @@ class ResampleBoostClassifier(  # pylint: disable=too-many-instance-attributes
             balancing_schedule
         )
 
-        self.eval_metrics_ = check_eval_metrics(eval_metrics)
+        self._train_state_.eval_metrics_ = check_eval_metrics(eval_metrics)
 
-        self.train_verbose_ = check_train_verbose(
+        self._train_state_.train_verbose_ = check_train_verbose(
             train_verbose, self.n_estimators, **self._properties
         )
 
@@ -484,7 +513,9 @@ class ResampleBoostClassifier(  # pylint: disable=too-many-instance-attributes
         self.estimators_ = []
         self.estimator_weights_ = np.zeros(self.n_estimators, dtype=np.float64)
         self.estimator_errors_ = np.ones(self.n_estimators, dtype=np.float64)
-        self.estimators_n_training_samples_ = np.zeros(self.n_estimators, dtype=int)
+        self._train_state_.estimators_n_training_samples_ = np.zeros(
+            self.n_estimators, dtype=int
+        )
 
         self.samplers_ = []
 
@@ -499,8 +530,8 @@ class ResampleBoostClassifier(  # pylint: disable=too-many-instance-attributes
         for iboost in range(self.n_estimators):
 
             current_iter_distr = self._train_state_.balancing_schedule_(
-                origin_distr=self.origin_distr_,
-                target_distr=self.target_distr_,
+                origin_distr=self._train_state_.origin_distr_,
+                target_distr=self._train_state_.target_distr_,
                 i_estimator=iboost,
                 total_estimator=self.n_estimators,
             )
@@ -535,7 +566,7 @@ class ResampleBoostClassifier(  # pylint: disable=too-many-instance-attributes
 
             self.estimator_weights_[iboost] = estimator_weight
             self.estimator_errors_[iboost] = estimator_error
-            self.estimators_n_training_samples_[iboost] = y_resampled.shape[0]
+            self._train_state_.estimators_n_training_samples_[iboost] = y_resampled.shape[0]
 
             # Print training infomation to console.
             self._training_log_to_console(iboost, y_resampled)
@@ -653,7 +684,7 @@ class ResampleBoostClassifier(  # pylint: disable=too-many-instance-attributes
 SET_COST_MATRIX_HOW = ("uniform", "inverse", "log1p-inverse")
 
 
-class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
+class ReweightBoostClassifier(
     ImbalancedEnsembleClassifierMixin, AdaBoostClassifier, metaclass=ABCMeta
 ):
     """Base class for all reweighting + boosting imbalanced ensemble classifier.
@@ -682,8 +713,6 @@ class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
         random_state=None,
     ):
 
-        self.early_termination = early_termination
-
         super(ReweightBoostClassifier, self).__init__(
             estimator=estimator,
             n_estimators=n_estimators,
@@ -691,6 +720,8 @@ class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
             algorithm=algorithm,
             random_state=random_state,
         )
+
+        self._train_state_ = _TrainingState(early_termination=early_termination)
 
     def _compute_mult_in_exp_weights_array(self, y_true, y_pred):
         """
@@ -725,7 +756,7 @@ class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
         """Set the cost matrix according to the 'how' parameter."""
         classes, origin_distr = (
             self._train_state_._encode_map.values(),
-            self.origin_distr_,
+            self._train_state_.origin_distr_,
         )
         cost_matrix = []
         for c_pred in classes:
@@ -915,7 +946,7 @@ class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
     ):
 
         early_termination_ = check_type(
-            self.early_termination, "early_termination", bool
+            self._train_state_.early_termination, "early_termination", bool
         )
 
         # Check that algorithm is supported.
@@ -945,10 +976,10 @@ class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
         }
         X, y = validate_data(self, X, y, **check_x_y_args)
 
-        self._train_state_ = _TrainingState()
-
         # Check evaluation data
-        self.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
+        self._train_state_.eval_datasets_ = check_eval_datasets(
+            eval_datasets, X, y, **check_x_y_args
+        )
 
         raw_y = y.copy()
         self.classes_, self._train_state_._y_encoded = np.unique(
@@ -960,12 +991,16 @@ class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
         self.n_classes_ = len(self.classes_)
 
         # Store original class distribution
-        self.origin_distr_ = dict(Counter(self._train_state_._y_encoded))
-        self.target_distr_ = dict(Counter(self._train_state_._y_encoded))
+        self._train_state_.origin_distr_ = dict(
+            Counter(self._train_state_._y_encoded)
+        )
+        self._train_state_.target_distr_ = dict(
+            Counter(self._train_state_._y_encoded)
+        )
 
-        self.eval_metrics_ = check_eval_metrics(eval_metrics)
+        self._train_state_.eval_metrics_ = check_eval_metrics(eval_metrics)
 
-        self.train_verbose_ = check_train_verbose(
+        self._train_state_.train_verbose_ = check_train_verbose(
             train_verbose, self.n_estimators, **self._properties
         )
 
@@ -990,7 +1025,7 @@ class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
         elif isinstance(cost_matrix, str):
             cost_matrix = self._set_cost_matrix(how=cost_matrix)
         cost_matrix = self._validate_cost_matrix(cost_matrix, self.n_classes_)
-        self.cost_matrix_ = cost_matrix
+        self._train_state_.cost_matrix_ = cost_matrix
 
         self._validate_estimator()
 
@@ -1001,7 +1036,9 @@ class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
         self.estimators_ = []
         self.estimator_weights_ = np.zeros(self.n_estimators, dtype=np.float64)
         self.estimator_errors_ = np.ones(self.n_estimators, dtype=np.float64)
-        self.estimators_n_training_samples_ = np.zeros(self.n_estimators, dtype=int)
+        self._train_state_.estimators_n_training_samples_ = np.zeros(
+            self.n_estimators, dtype=int
+        )
 
         # Genrate random seeds array
         seeds = random_state.randint(MAX_INT, size=self.n_estimators)
@@ -1015,7 +1052,7 @@ class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
 
             self.estimator_weights_[iboost] = estimator_weight
             self.estimator_errors_[iboost] = estimator_error
-            self.estimators_n_training_samples_[iboost] = y.shape[0]
+            self._train_state_.estimators_n_training_samples_[iboost] = y.shape[0]
 
             # Print training infomation to console.
             self._training_log_to_console(iboost, y)
