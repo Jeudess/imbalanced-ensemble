@@ -1,4 +1,4 @@
-﻿"""Class to perform random over-sampling."""
+"""Class to perform random over-sampling."""
 
 # Adapted from imbalanced-learn
 

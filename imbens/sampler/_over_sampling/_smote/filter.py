@@ -1,4 +1,4 @@
-﻿"""SMOTE variant applying some filtering before the generation process."""
+"""SMOTE variant applying some filtering before the generation process."""
 # Adapted from imbalanced-learn
 
 # Authors: Guillaume Lemaitre

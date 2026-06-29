@@ -1,0 +1,22 @@
+[
+  {
+    "categoria": "convention",
+    "ocorrencias": 1722,
+    "percentual": 48.49
+  },
+  {
+    "categoria": "refactor",
+    "ocorrencias": 810,
+    "percentual": 22.81
+  },
+  {
+    "categoria": "warning",
+    "ocorrencias": 752,
+    "percentual": 21.18
+  },
+  {
+    "categoria": "error",
+    "ocorrencias": 267,
+    "percentual": 7.52
+  }
+]
