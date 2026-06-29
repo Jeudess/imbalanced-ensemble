@@ -43,6 +43,7 @@ else:  # pragma: no cover
 import numbers
 from collections import Counter
 from copy import deepcopy
+from types import SimpleNamespace
 from warnings import warn
 
 import numpy as np
@@ -73,7 +74,7 @@ _sampling_type = "under-sampling"
 _ensemble_type = "random-forest"
 _training_type = "parallel"
 
-_properties = {
+_CLASS_PROPERTIES = {
     "sampling_type": _sampling_type,
     "solution_type": _solution_type,
     "ensemble_type": _ensemble_type,
@@ -119,11 +120,11 @@ def _local_parallel_build_trees(
 
 
 @Substitution(
-    random_state=_get_parameter_docstring("random_state", **_properties),
-    n_jobs=_get_parameter_docstring("n_jobs", **_properties),
+    random_state=_get_parameter_docstring("random_state", **_CLASS_PROPERTIES),
+    n_jobs=_get_parameter_docstring("n_jobs", **_CLASS_PROPERTIES),
     example=_get_example_docstring(_method_name),
 )
-class BalancedRandomForestClassifier(
+class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attributes
     ImbalancedEnsembleClassifierMixin, RandomForestClassifier
 ):
     """A balanced random forest classifier.
@@ -323,6 +324,59 @@ class BalancedRandomForestClassifier(
     {example}
     """
 
+    # --- Properties for backward compatibility ---
+    # (store data internally in _config)
+
+    @property
+    def __name__(self):
+        return self._config['name']
+
+    @property
+    def _sampling_type(self):
+        return self._config['sampling_type']
+
+    @property
+    def _sampler_class(self):
+        return _sampler_class
+
+    @property
+    def _properties(self):
+        return self._config['properties']
+
+    @property
+    def sampling_strategy(self):
+        return self._config['sampling_strategy']
+
+    @sampling_strategy.setter
+    def sampling_strategy(self, value):
+        self._config['sampling_strategy'] = value
+
+    @property
+    def replacement(self):
+        return self._config['replacement']
+
+    @replacement.setter
+    def replacement(self, value):
+        self._config['replacement'] = value
+
+    @property
+    def eval_datasets_(self):
+        if hasattr(self, '_train_state'):
+            return self._train_state.eval_datasets
+        return {}
+
+    @property
+    def eval_metrics_(self):
+        if hasattr(self, '_train_state'):
+            return self._train_state.eval_metrics
+        return {}
+
+    @property
+    def train_verbose_(self):
+        if hasattr(self, '_train_state'):
+            return self._train_state.train_verbose
+        return None
+
     @_deprecate_positional_args
     def __init__(
         self,
@@ -369,13 +423,13 @@ class BalancedRandomForestClassifier(
             max_samples=max_samples,
         )
 
-        self.__name__ = _method_name
-        self._sampling_type = _sampling_type
-        self._sampler_class = _sampler_class
-        self._properties = _properties
-
-        self.sampling_strategy = sampling_strategy
-        self.replacement = replacement
+        self._config = {
+            'name': _method_name,
+            'sampling_type': _sampling_type,
+            'properties': _CLASS_PROPERTIES,
+            'sampling_strategy': sampling_strategy,
+            'replacement': replacement,
+        }
 
     def _validate_estimator(self, default=DecisionTreeClassifier()):
         """Check the estimator and the n_estimator attribute, set the
@@ -396,7 +450,7 @@ class BalancedRandomForestClassifier(
             self.estimator_ = clone(default)
 
         self.sampler_ = RandomUnderSampler(
-            sampling_strategy=self._sampling_strategy,
+            sampling_strategy=self._train_state.sampling_strategy,
             replacement=self.replacement,
         )
 
@@ -419,7 +473,7 @@ class BalancedRandomForestClassifier(
     @FuncSubstitution(
         eval_datasets=_get_parameter_docstring("eval_datasets"),
         eval_metrics=_get_parameter_docstring("eval_metrics"),
-        train_verbose=_get_parameter_docstring("train_verbose", **_properties),
+        train_verbose=_get_parameter_docstring("train_verbose", **_CLASS_PROPERTIES),
     )
     def fit(
         self,
@@ -474,14 +528,17 @@ class BalancedRandomForestClassifier(
         }
         X, y = validate_data(self, X, y, **check_x_y_args)
 
+        # Create training state container
+        self._train_state = SimpleNamespace()
+
         # Check evaluation data
-        self.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
+        self._train_state.eval_datasets = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
 
         # Check evaluation metrics
-        self.eval_metrics_ = check_eval_metrics(eval_metrics)
+        self._train_state.eval_metrics = check_eval_metrics(eval_metrics)
 
         # Check verbose
-        self.train_verbose_ = check_train_verbose(
+        self._train_state.train_verbose = check_train_verbose(
             train_verbose, self.n_estimators, **self._properties
         )
         self._init_training_log_format()
@@ -520,7 +577,7 @@ class BalancedRandomForestClassifier(
             y_encoded = np.ascontiguousarray(y_encoded, dtype=DOUBLE)
 
         if isinstance(self.sampling_strategy, dict):
-            self._sampling_strategy = {
+            self._train_state.sampling_strategy = {
                 np.where(self.classes_[0] == key)[0][0]: value
                 for key, value in check_sampling_strategy(
                     self.sampling_strategy,
@@ -529,7 +586,7 @@ class BalancedRandomForestClassifier(
                 ).items()
             }
         else:
-            self._sampling_strategy = self.sampling_strategy
+            self._train_state.sampling_strategy = self.sampling_strategy
 
         if expanded_class_weight is not None:
             if sample_weight is not None:
