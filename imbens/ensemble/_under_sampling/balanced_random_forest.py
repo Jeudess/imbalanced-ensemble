@@ -540,8 +540,7 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
 
         return self
 
-    def _validate_and_prepare_data(self, X, y, sample_weight,
-                                    eval_datasets, eval_metrics, train_verbose):
+    def _validate_input_data(self, X, y):
         if issparse(y):
             raise ValueError("sparse multilabel-indicator for y is not supported.")
 
@@ -552,6 +551,14 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
         }
         X, y = validate_data(self, X, y, **check_x_y_args)
 
+        if issparse(X):
+            X.sort_indices()
+
+        _, self.n_features_in_ = X.shape
+
+        return X, y, check_x_y_args
+
+    def _init_training_state(self, eval_datasets, eval_metrics, train_verbose, X, y, check_x_y_args):
         self._train_state = SimpleNamespace()
 
         self._train_state.eval_datasets = check_eval_datasets(
@@ -563,14 +570,7 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
         )
         self._init_training_log_format()
 
-        if sample_weight is not None:
-            sample_weight = _check_sample_weight(sample_weight, X)
-
-        if issparse(X):
-            X.sort_indices()
-
-        _, self.n_features_in_ = X.shape
-
+    def _prepare_target(self, y):
         y = np.atleast_1d(y)
         if y.ndim == 2 and y.shape[1] == 1:
             warn(
@@ -591,6 +591,9 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
         if getattr(y, "dtype", None) != DOUBLE or not y.flags.contiguous:
             y_encoded = np.ascontiguousarray(y_encoded, dtype=DOUBLE)
 
+        return y_encoded, expanded_class_weight
+
+    def _resolve_sampling_strategy(self, y):
         if isinstance(self.sampling_strategy, dict):
             self._train_state.sampling_strategy = {
                 np.where(self.classes_[0] == key)[0][0]: value
@@ -603,11 +606,30 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
         else:
             self._train_state.sampling_strategy = self.sampling_strategy
 
+    def _apply_expanded_weights(self, sample_weight, expanded_class_weight):
         if expanded_class_weight is not None:
             if sample_weight is not None:
                 sample_weight = sample_weight * expanded_class_weight
             else:
                 sample_weight = expanded_class_weight
+        return sample_weight
+
+    def _validate_and_prepare_data(self, X, y, sample_weight,
+                                    eval_datasets, eval_metrics, train_verbose):
+        X, y, check_x_y_args = self._validate_input_data(X, y)
+
+        self._init_training_state(
+            eval_datasets, eval_metrics, train_verbose, X, y, check_x_y_args
+        )
+
+        if sample_weight is not None:
+            sample_weight = _check_sample_weight(sample_weight, X)
+
+        y_encoded, expanded_class_weight = self._prepare_target(y)
+
+        self._resolve_sampling_strategy(y)
+
+        sample_weight = self._apply_expanded_weights(sample_weight, expanded_class_weight)
 
         n_samples_bootstrap = _get_n_samples_bootstrap(
             n_samples=X.shape[0], max_samples=self.max_samples
