@@ -19,15 +19,13 @@ if not LOCAL_DEBUG:
     from ...utils._validation_data import check_eval_datasets
     from ...utils._validation_param import check_eval_metrics, check_train_verbose
     from .._bagging import _parallel_build_estimators
-    from .._boost import _TrainingState
-    from ..base import MAX_INT, ImbalancedEnsembleClassifierMixin
+    from ..base import _TrainingState, MAX_INT, ImbalancedEnsembleClassifierMixin
 else:  # pragma: no cover
     import sys  # For local test
 
     sys.path.append("../..")
     from ensemble._bagging import _parallel_build_estimators
-    from ensemble._boost import _TrainingState
-    from ensemble.base import ImbalancedEnsembleClassifierMixin, MAX_INT
+    from ensemble.base import _TrainingState, ImbalancedEnsembleClassifierMixin, MAX_INT
     from utils._validation_data import check_eval_datasets
     from utils._validation_param import check_train_verbose, check_eval_metrics
     from utils._validation import _deprecate_positional_args, check_target_type

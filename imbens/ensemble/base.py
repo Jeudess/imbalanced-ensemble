@@ -55,6 +55,87 @@ TRAINING_LOG_HEAD_TITLES = {
 MAX_INT = np.iinfo(np.int32).max
 
 
+class _TrainingState:  # pylint: disable=too-many-instance-attributes
+    """Container for internal training state attributes.
+
+    Groups fit-time internal attributes to reduce the number of
+    top-level instance attributes on the ensemble classes.
+    """
+
+    __slots__ = (
+        '_y_encoded',
+        '_seeds',
+        '_n_samples',
+        '_max_samples',
+        '_max_features',
+        'raw_sample_weight_',
+        'sampler_kwargs_',
+        'balancing_schedule_',
+        '_encode_map',
+        'origin_distr_',
+        'target_distr_',
+        'target_label_',
+        'eval_datasets_',
+        'eval_metrics_',
+        'train_verbose_',
+        'train_verbose_format_',
+        'cost_matrix_',
+        'estimators_n_training_samples_',
+        'sample_weights_',
+        'keep_ratios_',
+        'y_pred_proba_latest',
+        'early_termination',
+    )
+
+    def __init__(
+        self,
+        _y_encoded=None,
+        _seeds=None,
+        _n_samples=None,
+        _max_samples=None,
+        _max_features=None,
+        raw_sample_weight_=None,
+        sampler_kwargs_=None,
+        balancing_schedule_=None,
+        _encode_map=None,
+        origin_distr_=None,
+        target_distr_=None,
+        target_label_=None,
+        eval_datasets_=None,
+        eval_metrics_=None,
+        train_verbose_=None,
+        train_verbose_format_=None,
+        cost_matrix_=None,
+        estimators_n_training_samples_=None,
+        sample_weights_=None,
+        keep_ratios_=None,
+        y_pred_proba_latest=None,
+        early_termination=None,
+    ):
+        self._y_encoded = _y_encoded
+        self._seeds = _seeds
+        self._n_samples = _n_samples
+        self._max_samples = _max_samples
+        self._max_features = _max_features
+        self.raw_sample_weight_ = raw_sample_weight_
+        self.sampler_kwargs_ = sampler_kwargs_
+        self.balancing_schedule_ = balancing_schedule_
+        self._encode_map = _encode_map
+        self.origin_distr_ = origin_distr_
+        self.target_distr_ = target_distr_
+        self.target_label_ = target_label_
+        self.eval_datasets_ = eval_datasets_
+        self.eval_metrics_ = eval_metrics_
+        self.train_verbose_ = train_verbose_
+        self.train_verbose_format_ = train_verbose_format_
+        self.cost_matrix_ = cost_matrix_
+        self.estimators_n_training_samples_ = estimators_n_training_samples_
+        self.sample_weights_ = sample_weights_
+        self.keep_ratios_ = keep_ratios_
+        self.y_pred_proba_latest = y_pred_proba_latest
+        self.early_termination = early_termination
+
+
 def sort_dict_by_key(d):
     """Sort a dict by key, return sorted dict."""
     return dict(sorted(d.items(), key=lambda k: k[0]))
