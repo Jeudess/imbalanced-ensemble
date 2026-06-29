@@ -58,7 +58,40 @@ from sklearn.utils.validation import _check_sample_weight, validate_data
 _super = AdaBoostClassifier
 
 
-class ResampleBoostClassifier(
+class _TrainingState:
+    """Container for internal training state attributes.
+
+    Groups fit-time internal attributes to reduce the number of
+    top-level instance attributes on the ensemble classes.
+    """
+
+    __slots__ = (
+        '_y_encoded',
+        '_seeds',
+        'raw_sample_weight_',
+        'sampler_kwargs_',
+        'balancing_schedule_',
+        '_encode_map',
+    )
+
+    def __init__(
+        self,
+        _y_encoded=None,
+        _seeds=None,
+        raw_sample_weight_=None,
+        sampler_kwargs_=None,
+        balancing_schedule_=None,
+        _encode_map=None,
+    ):
+        self._y_encoded = _y_encoded
+        self._seeds = _seeds
+        self.raw_sample_weight_ = raw_sample_weight_
+        self.sampler_kwargs_ = sampler_kwargs_
+        self.balancing_schedule_ = balancing_schedule_
+        self._encode_map = _encode_map
+
+
+class ResampleBoostClassifier(  # pylint: disable=too-many-instance-attributes
     ImbalancedEnsembleClassifierMixin, AdaBoostClassifier, metaclass=ABCMeta
 ):
     """Base class for all resampling + boosting imbalanced ensemble classifier.
@@ -131,10 +164,10 @@ class ResampleBoostClassifier(
         """
 
         sampler = clone(self.sampler_)
-        sampler.set_params(**self.sampler_kwargs_)
+        sampler.set_params(**self._train_state_.sampler_kwargs_)
 
         # Arguments passed to _make_sampler function have higher priority,
-        # they will overwrite the self.sampler_kwargs_
+        # they will overwrite the self._train_state_.sampler_kwargs_
         sampler.set_params(**overwrite_kwargs)
 
         if random_state is not None:
@@ -367,7 +400,10 @@ class ResampleBoostClassifier(
             update_x_y_after_resample, "update_x_y_after_resample", bool
         )
 
-        self.sampler_kwargs_ = check_type(sampler_kwargs, "sampler_kwargs", dict)
+        self._train_state_ = _TrainingState()
+        self._train_state_.sampler_kwargs_ = check_type(
+            sampler_kwargs, "sampler_kwargs", dict
+        )
 
         early_termination_ = check_type(
             self.early_termination, "early_termination", bool
@@ -403,7 +439,9 @@ class ResampleBoostClassifier(
         # Check evaluation data
         self.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
 
-        self.classes_, self._y_encoded = np.unique(y, return_inverse=True)
+        self.classes_, self._train_state_._y_encoded = np.unique(
+            y, return_inverse=True
+        )
         self.n_classes_ = len(self.classes_)
 
         # Store original class distribution
@@ -415,7 +453,9 @@ class ResampleBoostClassifier(
             y, target_label, n_target_samples, self._sampling_type
         )
 
-        self.balancing_schedule_ = check_balancing_schedule(balancing_schedule)
+        self._train_state_.balancing_schedule_ = check_balancing_schedule(
+            balancing_schedule
+        )
 
         self.eval_metrics_ = check_eval_metrics(eval_metrics)
 
@@ -431,9 +471,9 @@ class ResampleBoostClassifier(
         if np.any(sample_weight < 0):
             raise ValueError("sample_weight cannot contain negative weights")
 
-        self.raw_sample_weight_ = sample_weight
+        self._train_state_.raw_sample_weight_ = sample_weight
 
-        sample_weight = copy(self.raw_sample_weight_)
+        sample_weight = copy(self._train_state_.raw_sample_weight_)
 
         self._validate_estimator()
 
@@ -450,7 +490,7 @@ class ResampleBoostClassifier(
 
         # Genrate random seeds array
         seeds = random_state.randint(MAX_INT, size=self.n_estimators)
-        self._seeds = seeds
+        self._train_state_._seeds = seeds
 
         epsilon = np.finfo(sample_weight.dtype).eps
         zero_weight_mask = sample_weight == 0.0
@@ -458,7 +498,7 @@ class ResampleBoostClassifier(
 
         for iboost in range(self.n_estimators):
 
-            current_iter_distr = self.balancing_schedule_(
+            current_iter_distr = self._train_state_.balancing_schedule_(
                 origin_distr=self.origin_distr_,
                 target_distr=self.target_distr_,
                 i_estimator=iboost,
@@ -613,7 +653,7 @@ class ResampleBoostClassifier(
 SET_COST_MATRIX_HOW = ("uniform", "inverse", "log1p-inverse")
 
 
-class ReweightBoostClassifier(
+class ReweightBoostClassifier(  # pylint: disable=too-many-instance-attributes
     ImbalancedEnsembleClassifierMixin, AdaBoostClassifier, metaclass=ABCMeta
 ):
     """Base class for all reweighting + boosting imbalanced ensemble classifier.
@@ -683,7 +723,10 @@ class ReweightBoostClassifier(
 
     def _set_cost_matrix(self, how: str = "inverse"):
         """Set the cost matrix according to the 'how' parameter."""
-        classes, origin_distr = self._encode_map.values(), self.origin_distr_
+        classes, origin_distr = (
+            self._train_state_._encode_map.values(),
+            self.origin_distr_,
+        )
         cost_matrix = []
         for c_pred in classes:
             cost_c = [
@@ -726,7 +769,9 @@ class ReweightBoostClassifier(
         y_predict_proba = estimator.predict_proba(X)
 
         y_predict = self.classes_.take(np.argmax(y_predict_proba, axis=1), axis=0)
-        y_predict = np.array(list(map(lambda x: self._encode_map[x], y_predict)))
+        y_predict = np.array(
+            list(map(lambda x: self._train_state_._encode_map[x], y_predict))
+        )
 
         # Instances incorrectly classified
         incorrect = y_predict != y
@@ -766,11 +811,11 @@ class ReweightBoostClassifier(
 
         # Compute additional weights for multiplication
         mult_in_exp_weight = self._compute_mult_in_exp_weights_array(
-            y_true=self._y_encoded, y_pred=y_predict
+            y_true=self._train_state_._y_encoded, y_pred=y_predict
         )
         mult_in_exp_weight /= mult_in_exp_weight.max()
         mult_out_exp_weight = self._compute_mult_out_exp_weights_array(
-            y_true=self._y_encoded, y_pred=y_predict
+            y_true=self._train_state_._y_encoded, y_pred=y_predict
         )
 
         # Only boost the weights if it will fit again
@@ -806,7 +851,9 @@ class ReweightBoostClassifier(
         # Instances incorrectly classified
         incorrect = y_predict != y
 
-        y_predict = np.array(list(map(lambda x: self._encode_map[x], y_predict)))
+        y_predict = np.array(
+            list(map(lambda x: self._train_state_._encode_map[x], y_predict))
+        )
 
         # Error fraction
         estimator_error = np.mean(np.average(incorrect, weights=sample_weight, axis=0))
@@ -833,10 +880,10 @@ class ReweightBoostClassifier(
 
         # Compute additional weights for multiplication
         mult_in_exp_weight = self._compute_mult_in_exp_weights_array(
-            y_true=self._y_encoded, y_pred=y_predict
+            y_true=self._train_state_._y_encoded, y_pred=y_predict
         )
         mult_out_exp_weight = self._compute_mult_out_exp_weights_array(
-            y_true=self._y_encoded, y_pred=y_predict
+            y_true=self._train_state_._y_encoded, y_pred=y_predict
         )
 
         # Only boost the weights if I will fit again
@@ -898,19 +945,23 @@ class ReweightBoostClassifier(
         }
         X, y = validate_data(self, X, y, **check_x_y_args)
 
+        self._train_state_ = _TrainingState()
+
         # Check evaluation data
         self.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
 
         raw_y = y.copy()
-        self.classes_, self._y_encoded = np.unique(y, return_inverse=True)
-        self._encode_map = {
+        self.classes_, self._train_state_._y_encoded = np.unique(
+            y, return_inverse=True
+        )
+        self._train_state_._encode_map = {
             c: np.where(self.classes_ == c)[0][0] for c in self.classes_
         }
         self.n_classes_ = len(self.classes_)
 
         # Store original class distribution
-        self.origin_distr_ = dict(Counter(self._y_encoded))
-        self.target_distr_ = dict(Counter(self._y_encoded))
+        self.origin_distr_ = dict(Counter(self._train_state_._y_encoded))
+        self.target_distr_ = dict(Counter(self._train_state_._y_encoded))
 
         self.eval_metrics_ = check_eval_metrics(eval_metrics)
 
@@ -922,14 +973,16 @@ class ReweightBoostClassifier(
 
         # Check sample weight
         sample_weight = _check_sample_weight(sample_weight, X, np.float64)
-        sample_weight = self._preprocess_sample_weight(sample_weight, self._y_encoded)
+        sample_weight = self._preprocess_sample_weight(
+            sample_weight, self._train_state_._y_encoded
+        )
         sample_weight /= sample_weight.sum()
         if np.any(sample_weight < 0):
             raise ValueError("sample_weight cannot contain negative weights")
 
-        self.raw_sample_weight_ = sample_weight
+        self._train_state_.raw_sample_weight_ = sample_weight
 
-        sample_weight = copy(self.raw_sample_weight_)
+        sample_weight = copy(self._train_state_.raw_sample_weight_)
 
         # Initialize & validate cost matrix
         if cost_matrix is None:
@@ -952,7 +1005,7 @@ class ReweightBoostClassifier(
 
         # Genrate random seeds array
         seeds = random_state.randint(MAX_INT, size=self.n_estimators)
-        self._seeds = seeds
+        self._train_state_._seeds = seeds
 
         for iboost in range(self.n_estimators):
             # Boosting step
