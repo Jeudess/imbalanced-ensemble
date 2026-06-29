@@ -700,6 +700,11 @@ class ImbalancedEnsembleVisualizer:
         fig, axes = plt.subplots(n_rows_fig, n_columns_fig, figsize=figsize)
         axes = np.array(axes).reshape(n_rows_fig, n_columns_fig)
 
+        self._annotate_column_titles(axes, on_metrics)
+
+        return fig, axes, n_rows_fig, n_columns_fig, total_height
+
+    def _annotate_column_titles(self, axes, on_metrics):
         pad = 10
         col_titles = ["Metric: <{}>".format(metric) for metric in on_metrics]
         for ax, col_title in zip(axes[0], col_titles):
@@ -714,8 +719,6 @@ class ImbalancedEnsembleVisualizer:
                 **self._title_styles['row_col'],
             )
 
-        return fig, axes, n_rows_fig, n_columns_fig, total_height
-
     @staticmethod
     def _set_figure_suptitle(
         fig, sup_title_, singular_text, plural_text, is_single, suptitle_style
@@ -726,6 +729,43 @@ class ImbalancedEnsembleVisualizer:
             )
         elif isinstance(sup_title_, str):
             fig.suptitle(sup_title_, **suptitle_style)
+
+    def _plot_single_performance_curve(
+        self, ax, data, x_column, x_label, metric_name, lineplot_kwargs
+    ):
+        kwargs = {
+            "data": data,
+            "x": x_column,
+            "y": "score",
+            "hue": "method",
+            "style": "dataset",
+            "ax": ax,
+        }
+        kwargs.update(lineplot_kwargs)
+        ax = sns.lineplot(**kwargs)
+        ax.legend(
+            columnspacing=0.3,
+            borderaxespad=0.3,
+            handletextpad=0.3,
+            labelspacing=0.1,
+            handlelength=None,
+            borderpad=0.4,
+        )
+        ax = set_ax_border(ax, border_color="black", border_width=2)
+        ax.set_xlabel(x_label, **self._title_styles['axis'])
+        ax.set_ylabel(f"{metric_name}", **self._title_styles['axis'])
+        ax.grid(color="black", linestyle="-.", alpha=0.3)
+
+    def _finalize_performance_figure(
+        self, fig, total_height, sup_title_, n_rows_fig, n_columns_fig
+    ):
+        height_rect = (total_height - RESERVED_SUPTITLE_INCHES) / total_height
+        plt.tight_layout(rect=(0, 0, 1, height_rect))
+
+        ImbalancedEnsembleVisualizer._set_figure_suptitle(
+            fig, sup_title_, "Performance Curve", "Performance Curves",
+            n_rows_fig == n_columns_fig == 1, self._title_styles['suptitle']
+        )
 
     def performance_lineplot(
         self,
@@ -814,35 +854,13 @@ class ImbalancedEnsembleVisualizer:
         vis_df_grp = vis_perf_dataframe.groupby(by=split_by + ["metric"])
         for (key, _), ax in zip(vis_df_grp.groups.items(), axes.flatten()):
             metric_name = key if len(split_by) == 0 else key[-1]
-            kwargs = {
-                "data": vis_df_grp.get_group(key).reset_index(drop=True),
-                "x": x_column,
-                "y": "score",
-                "hue": "method",
-                "style": "dataset",
-                "ax": ax,
-            }
-            kwargs.update(lineplot_kwargs_)
-            ax = sns.lineplot(**kwargs)
-            ax.legend(
-                columnspacing=0.3,
-                borderaxespad=0.3,
-                handletextpad=0.3,
-                labelspacing=0.1,
-                handlelength=None,
-                borderpad=0.4,
+            data = vis_df_grp.get_group(key).reset_index(drop=True)
+            self._plot_single_performance_curve(
+                ax, data, x_column, x_label, metric_name, lineplot_kwargs_
             )
-            ax = set_ax_border(ax, border_color="black", border_width=2)
-            ax.set_xlabel(x_label, **self._title_styles['axis'])
-            ax.set_ylabel(f"{metric_name}", **self._title_styles['axis'])
-            ax.grid(color="black", linestyle="-.", alpha=0.3)
 
-        height_rect = (total_height - RESERVED_SUPTITLE_INCHES) / total_height
-        plt.tight_layout(rect=(0, 0, 1, height_rect))
-
-        ImbalancedEnsembleVisualizer._set_figure_suptitle(
-            fig, sup_title_, "Performance Curve", "Performance Curves",
-            n_rows_fig == n_columns_fig == 1, self._title_styles['suptitle']
+        self._finalize_performance_figure(
+            fig, total_height, sup_title_, n_rows_fig, n_columns_fig
         )
 
         return fig, axes
