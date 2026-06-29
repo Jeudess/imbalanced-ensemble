@@ -19,13 +19,15 @@ if not LOCAL_DEBUG:
     from ...utils._validation_data import check_eval_datasets
     from ...utils._validation_param import check_eval_metrics, check_train_verbose
     from .._bagging import _parallel_build_estimators
+    from .._boost import _TrainingState
     from ..base import MAX_INT, ImbalancedEnsembleClassifierMixin
 else:  # pragma: no cover
     import sys  # For local test
 
     sys.path.append("../..")
-    from ensemble.base import ImbalancedEnsembleClassifierMixin, MAX_INT
     from ensemble._bagging import _parallel_build_estimators
+    from ensemble._boost import _TrainingState
+    from ensemble.base import ImbalancedEnsembleClassifierMixin, MAX_INT
     from utils._validation_data import check_eval_datasets
     from utils._validation_param import check_train_verbose, check_eval_metrics
     from utils._validation import _deprecate_positional_args, check_target_type
@@ -194,6 +196,37 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
     {example}
     """
 
+    __name__ = _method_name
+    _properties = _properties
+
+    @property
+    def _max_samples(self):
+        if hasattr(self, '_train_state_'):
+            return self._train_state_._max_samples
+        return self.max_samples
+
+    @property
+    def _max_features(self):
+        if hasattr(self, '_train_state_'):
+            return self._train_state_._max_features
+        return self.max_features
+
+    @property
+    def _n_samples(self):
+        if hasattr(self, '_train_state_'):
+            return self._train_state_._n_samples
+        return 0
+
+    @property
+    def _seeds(self):
+        if hasattr(self, '_train_state_'):
+            return self._train_state_._seeds
+        return None
+
+    @_seeds.setter
+    def _seeds(self, value):
+        self._train_state_._seeds = value
+
     @_deprecate_positional_args
     def __init__(
         self,
@@ -225,8 +258,7 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
             verbose=verbose,
         )
 
-        self.__name__ = _method_name
-        self._properties = _properties
+        self._train_state_ = _TrainingState()
 
     @_deprecate_positional_args
     @FuncSubstitution(
@@ -289,13 +321,13 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
         X, y = validate_data(self, X, y, **check_x_y_args)
 
         # Check evaluation data
-        self.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
+        self._train_state_.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
 
         # Check evaluation metrics
-        self.eval_metrics_ = check_eval_metrics(eval_metrics)
+        self._train_state_.eval_metrics_ = check_eval_metrics(eval_metrics)
 
         # Check verbose
-        self.train_verbose_ = check_train_verbose(
+        self._train_state_.train_verbose_ = check_train_verbose(
             train_verbose, self.n_estimators, **self._properties
         )
         self._init_training_log_format()
@@ -305,7 +337,7 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
 
         # Remap output
         n_samples, self.n_features_in_ = X.shape
-        self._n_samples = n_samples
+        self._train_state_._n_samples = n_samples
         y = self._validate_y(y)
 
         # Check parameters
@@ -321,7 +353,7 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
             raise ValueError("max_samples must be in (0, n_samples]")
 
         # Store validated integer row sampling value
-        self._max_samples = max_samples
+        self._train_state_._max_samples = max_samples
 
         # Validate max_features
         if isinstance(self.max_features, numbers.Integral):
@@ -337,7 +369,7 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
         max_features = max(1, int(max_features))
 
         # Store validated integer feature sampling value
-        self._max_features = max_features
+        self._train_state_._max_features = max_features
 
         # Other checks
         if not self.bootstrap and self.oob_score:
@@ -387,7 +419,7 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
             random_state.randint(MAX_INT, size=len(self.estimators_))
 
         seeds = random_state.randint(MAX_INT, size=n_more_estimators)
-        self._seeds = seeds
+        self._train_state_._seeds = seeds
 
         all_results = Parallel(
             n_jobs=n_jobs, verbose=self.verbose, **self._parallel_args()

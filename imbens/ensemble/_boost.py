@@ -68,6 +68,9 @@ class _TrainingState:  # pylint: disable=too-many-instance-attributes
     __slots__ = (
         '_y_encoded',
         '_seeds',
+        '_n_samples',
+        '_max_samples',
+        '_max_features',
         'raw_sample_weight_',
         'sampler_kwargs_',
         'balancing_schedule_',
@@ -87,6 +90,9 @@ class _TrainingState:  # pylint: disable=too-many-instance-attributes
         self,
         _y_encoded=None,
         _seeds=None,
+        _n_samples=None,
+        _max_samples=None,
+        _max_features=None,
         raw_sample_weight_=None,
         sampler_kwargs_=None,
         balancing_schedule_=None,
@@ -103,6 +109,9 @@ class _TrainingState:  # pylint: disable=too-many-instance-attributes
     ):
         self._y_encoded = _y_encoded
         self._seeds = _seeds
+        self._n_samples = _n_samples
+        self._max_samples = _max_samples
+        self._max_features = _max_features
         self.raw_sample_weight_ = raw_sample_weight_
         self.sampler_kwargs_ = sampler_kwargs_
         self.balancing_schedule_ = balancing_schedule_
