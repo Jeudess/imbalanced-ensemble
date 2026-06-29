@@ -309,7 +309,6 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
 
         random_state = check_random_state(self.random_state)
 
-        # Convert data (X is required to be 2d and indexable)
         check_x_y_args = {
             "accept_sparse": ["csr", "csc"],
             "dtype": None,
@@ -318,13 +317,8 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
         }
         X, y = validate_data(self, X, y, **check_x_y_args)
 
-        # Check evaluation data
         self._train_state_.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
-
-        # Check evaluation metrics
         self._train_state_.eval_metrics_ = check_eval_metrics(eval_metrics)
-
-        # Check verbose
         self._train_state_.train_verbose_ = check_train_verbose(
             train_verbose, self.n_estimators, **self._properties
         )
@@ -333,86 +327,26 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
         if sample_weight is not None:
             sample_weight = _check_sample_weight(sample_weight, X, dtype=None)
 
-        # Remap output
         n_samples, self.n_features_in_ = X.shape
         self._train_state_._n_samples = n_samples
         y = self._validate_y(y)
 
-        # Check parameters
         self._validate_estimator(self._get_estimator())
 
-        # Validate max_samples
-        if max_samples is None:
-            max_samples = self.max_samples
-        if not isinstance(max_samples, numbers.Integral):
-            max_samples = int(max_samples * X.shape[0])
+        max_samples = self._validate_max_samples(max_samples, X)
+        max_features = self._validate_max_features()
 
-        if not (0 < max_samples <= X.shape[0]):
-            raise ValueError("max_samples must be in (0, n_samples]")
+        self._validate_common_checks()
 
-        # Store validated integer row sampling value
-        self._train_state_._max_samples = max_samples
-
-        # Validate max_features
-        if isinstance(self.max_features, numbers.Integral):
-            max_features = self.max_features
-        elif isinstance(self.max_features, float):
-            max_features = self.max_features * self.n_features_in_
-        else:
-            raise ValueError("max_features must be int or float")
-
-        if not (0 < max_features <= self.n_features_in_):
-            raise ValueError("max_features must be in (0, n_features]")
-
-        max_features = max(1, int(max_features))
-
-        # Store validated integer feature sampling value
-        self._train_state_._max_features = max_features
-
-        # Other checks
-        if not self.bootstrap and self.oob_score:
-            raise ValueError(
-                "Out of bag estimation only available" " if bootstrap=True"
-            )
-
-        if self.warm_start and self.oob_score:
-            raise ValueError(
-                "Out of bag estimate only available" " if warm_start=False"
-            )
-
-        if hasattr(self, "oob_score_") and self.warm_start:
-            del self.oob_score_
-
-        if not self.warm_start or not hasattr(self, "estimators_"):
-            # Free allocated memory, if any
-            self.estimators_ = []
-            self.estimators_features_ = []
-            self.estimators_n_training_samples_ = []
-
-        n_more_estimators = self.n_estimators - len(self.estimators_)
-
-        if n_more_estimators < 0:
-            raise ValueError(
-                "n_estimators=%d must be larger or equal to "
-                "len(estimators_)=%d when warm_start==True"
-                % (self.n_estimators, len(self.estimators_))
-            )
-
-        elif n_more_estimators == 0:
-            warn(
-                "Warm-start fitting without increasing n_estimators does not "
-                "fit new trees."
-            )
+        n_more_estimators = self._initialize_warm_start()
+        if n_more_estimators == 0:
             return self
 
-        # Parallel loop
         n_jobs, n_estimators, starts = _partition_estimators(
             n_more_estimators, self.n_jobs
         )
         total_n_estimators = sum(n_estimators)
 
-        # Advance random state to state after training
-        # the first n_estimators
         if self.warm_start and len(self.estimators_) > 0:
             random_state.randint(MAX_INT, size=len(self.estimators_))
 
@@ -435,7 +369,6 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
             for i in range(n_jobs)
         )
 
-        # Reduce
         self.estimators_ += list(
             itertools.chain.from_iterable(t[0] for t in all_results)
         )
@@ -449,10 +382,74 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
         if self.oob_score:
             self._set_oob_score(X, y)
 
-        # Print training infomation to console.
         self._training_log_to_console()
 
         return self
+
+    def _validate_max_samples(self, max_samples, X):
+        if max_samples is None:
+            max_samples = self.max_samples
+        if not isinstance(max_samples, numbers.Integral):
+            max_samples = int(max_samples * X.shape[0])
+
+        if not (0 < max_samples <= X.shape[0]):
+            raise ValueError("max_samples must be in (0, n_samples]")
+
+        self._train_state_._max_samples = max_samples
+        return max_samples
+
+    def _validate_max_features(self):
+        if isinstance(self.max_features, numbers.Integral):
+            max_features = self.max_features
+        elif isinstance(self.max_features, float):
+            max_features = self.max_features * self.n_features_in_
+        else:
+            raise ValueError("max_features must be int or float")
+
+        if not (0 < max_features <= self.n_features_in_):
+            raise ValueError("max_features must be in (0, n_features]")
+
+        max_features = max(1, int(max_features))
+
+        self._train_state_._max_features = max_features
+        return max_features
+
+    def _validate_common_checks(self):
+        if not self.bootstrap and self.oob_score:
+            raise ValueError(
+                "Out of bag estimation only available" " if bootstrap=True"
+            )
+
+        if self.warm_start and self.oob_score:
+            raise ValueError(
+                "Out of bag estimate only available" " if warm_start=False"
+            )
+
+        if hasattr(self, "oob_score_") and self.warm_start:
+            del self.oob_score_
+
+    def _initialize_warm_start(self):
+        if not self.warm_start or not hasattr(self, "estimators_"):
+            self.estimators_ = []
+            self.estimators_features_ = []
+            self.estimators_n_training_samples_ = []
+
+        n_more_estimators = self.n_estimators - len(self.estimators_)
+
+        if n_more_estimators < 0:
+            raise ValueError(
+                "n_estimators=%d must be larger or equal to "
+                "len(estimators_)=%d when warm_start==True"
+                % (self.n_estimators, len(self.estimators_))
+            )
+
+        elif n_more_estimators == 0:
+            warn(
+                "Warm-start fitting without increasing n_estimators does not "
+                "fit new trees."
+            )
+
+        return n_more_estimators
 
     @FuncGlossarySubstitution(_super.predict_proba, "classes_")
     def predict_proba(self, X):
