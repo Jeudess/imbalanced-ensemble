@@ -582,6 +582,151 @@ class ImbalancedEnsembleVisualizer:
 
         return tuple(positives), tuple(negatives)
 
+    def _validate_performance_lineplot_params(
+        self, on_ensembles, on_datasets, on_metrics, split_by,
+        n_samples_as_x_axis, sub_figsize, sup_title, lineplot_kwargs
+    ):
+        vis_perf_dataframe = self._fit_data.perf_dataframe_.copy()
+
+        if not self._fitted:
+            raise NotFittedError(
+                f"This visualizer is not fitted yet."
+                f" Call 'fit' with appropriate arguments before calling"
+                f" 'performance_lineplot'."
+            )
+
+        on_ensembles = self._check_is_subset(
+            on_ensembles, "on_ensembles", self._fit_data.vis_format_["ensemble_names"]
+        )
+        on_datasets = self._check_is_subset(
+            on_datasets, "on_datasets", self._fit_data.vis_format_["dataset_names"]
+        )
+        on_metrics = self._check_is_subset(
+            on_metrics, "on_metrics", self._fit_data.vis_format_["metric_names"]
+        )
+        n_datasets, n_metrics = len(on_datasets), len(on_metrics)
+
+        if not isinstance(split_by, list):
+            raise TypeError(
+                f"'split_by' should be a `list` of `string`, got {type(split_by)}."
+                f" Elements should be one of {SPLIT_BY}."
+            )
+        check_has_diff_elements(
+            split_by,
+            SPLIT_BY,
+            msg=f"Got unsupported value %(diff_set)s in 'split_by'."
+            f" Elements should be one of {SPLIT_BY}.",
+        )
+
+        n_samples_as_x_axis_ = check_type(
+            n_samples_as_x_axis, "n_samples_as_x_axis_", bool
+        )
+
+        (sub_fig_width, sub_fig_height) = check_plot_figsize(sub_figsize)
+
+        sup_title_ = check_type(sup_title, "sup_title", (bool, str))
+
+        lineplot_kwargs_ = copy(LINEPLOT_KWARGS_DEFAULT)
+        lineplot_kwargs_.update(lineplot_kwargs)
+        for kw in ["ax", "data", "x", "y", "hue", "style"]:
+            if kw in lineplot_kwargs_.keys():
+                raise ValueError(
+                    f"Cannot set parameter '{kw}' for"
+                    f" performance_lineplot function."
+                )
+
+        on_ensembles_mask = vis_perf_dataframe["method"].map(
+            {k: k in on_ensembles for k in self._fit_data.vis_format_["ensemble_names"]}
+        )
+        on_datasets_mask = vis_perf_dataframe["dataset"].map(
+            {k: k in on_datasets for k in self._fit_data.vis_format_["dataset_names"]}
+        )
+        on_metrics_mask = vis_perf_dataframe["metric"].map(
+            {k: k in on_metrics for k in self._fit_data.vis_format_["metric_names"]}
+        )
+        final_mask = on_ensembles_mask & on_datasets_mask & on_metrics_mask
+        vis_perf_dataframe = vis_perf_dataframe.loc[final_mask]
+
+        return (vis_perf_dataframe, on_ensembles, on_metrics, n_datasets,
+                n_metrics, n_samples_as_x_axis_, sub_fig_width,
+                sub_fig_height, sup_title_, lineplot_kwargs_)
+
+    def _configure_x_axis(
+        self, vis_perf_dataframe, on_ensembles, n_samples_as_x_axis_
+    ):
+        n_ensembles = len(on_ensembles)
+
+        if n_samples_as_x_axis_:
+            (
+                include_ensembles,
+                exclude_ensembles,
+            ) = self._split_ensembles_by_has_n_training_samples_(on_ensembles)
+            if len(exclude_ensembles) > 0:
+                warn(
+                    f"scikit-learn ensemble estimator(s) with name"
+                    + f" {exclude_ensembles} does not record the number"
+                    + f" training samples, they will be excluded from the"
+                    + f" figure when `n_samples_as_x_axis` = `True`."
+                )
+                n_ensembles = len(include_ensembles)
+                has_n_samples_mask = vis_perf_dataframe["method"].map(
+                    self._fit_data.ensembles_has_n_training_samples_
+                )
+                vis_perf_dataframe = vis_perf_dataframe.loc[has_n_samples_mask]
+            x_column = "n_samples"
+            x_label = "# Training Samples"
+        else:
+            x_column = "n_estimators"
+            x_label = "# Base Estimators"
+
+        return x_column, x_label, vis_perf_dataframe, n_ensembles
+
+    def _setup_figure_layout(
+        self, n_ensembles, n_datasets, n_metrics, split_by,
+        sub_fig_width, sub_fig_height, sup_title_, on_metrics
+    ):
+        n_rows_fig, n_columns_fig = 1, n_metrics
+        if "method" in split_by:
+            n_rows_fig *= n_ensembles
+        if "dataset" in split_by:
+            n_rows_fig *= n_datasets
+
+        total_width, total_height = (
+            sub_fig_width * n_columns_fig,
+            sub_fig_height * n_rows_fig,
+        )
+        total_height += RESERVED_SUPTITLE_INCHES if sup_title_ else 0
+        figsize = (total_width, total_height)
+        fig, axes = plt.subplots(n_rows_fig, n_columns_fig, figsize=figsize)
+        axes = np.array(axes).reshape(n_rows_fig, n_columns_fig)
+
+        pad = 10
+        col_titles = ["Metric: <{}>".format(metric) for metric in on_metrics]
+        for ax, col_title in zip(axes[0], col_titles):
+            ax.annotate(
+                col_title,
+                xy=(0.5, 1),
+                xytext=(0, pad),
+                xycoords="axes fraction",
+                textcoords="offset points",
+                ha="center",
+                va="baseline",
+                **self._title_styles['row_col'],
+            )
+
+        return fig, axes, n_rows_fig, n_columns_fig, total_height
+
+    @staticmethod
+    def _set_figure_suptitle(
+        fig, sup_title_, singular_text, plural_text, is_single, suptitle_style
+    ):
+        if sup_title_ is True:
+            fig.suptitle(
+                singular_text if is_single else plural_text, **suptitle_style
+            )
+        elif isinstance(sup_title_, str):
+            fig.suptitle(sup_title_, **suptitle_style)
+
     def performance_lineplot(
         self,
         on_ensembles: list = None,
@@ -644,141 +789,31 @@ class ImbalancedEnsembleVisualizer:
         self : object
         """
 
-        vis_perf_dataframe = self._fit_data.perf_dataframe_.copy()
-
-        # Check if the visualizer is fitted
-        if not self._fitted:
-            raise NotFittedError(
-                f"This visualizer is not fitted yet."
-                f" Call 'fit' with appropriate arguments before calling"
-                f" 'performance_lineplot'."
+        (vis_perf_dataframe, on_ensembles, on_metrics, n_datasets,
+         n_metrics, n_samples_as_x_axis_, sub_fig_width,
+         sub_fig_height, sup_title_, lineplot_kwargs_) = (
+            self._validate_performance_lineplot_params(
+                on_ensembles, on_datasets, on_metrics, split_by,
+                n_samples_as_x_axis, sub_figsize, sup_title, lineplot_kwargs
             )
-
-        # Check parameters
-        on_ensembles = self._check_is_subset(
-            on_ensembles, "on_ensembles", self._fit_data.vis_format_["ensemble_names"]
-        )
-        on_datasets = self._check_is_subset(
-            on_datasets, "on_datasets", self._fit_data.vis_format_["dataset_names"]
-        )
-        on_metrics = self._check_is_subset(
-            on_metrics, "on_metrics", self._fit_data.vis_format_["metric_names"]
-        )
-        n_ensembles, n_datasets, n_metrics = (
-            len(on_ensembles),
-            len(on_datasets),
-            len(on_metrics),
         )
 
-        if not isinstance(split_by, list):
-            raise TypeError(
-                f"'split_by' should be a `list` of `string`, got {type(split_by)}."
-                f" Elements should be one of {SPLIT_BY}."
+        x_column, x_label, vis_perf_dataframe, n_ensembles = (
+            self._configure_x_axis(
+                vis_perf_dataframe, on_ensembles, n_samples_as_x_axis_
             )
-        check_has_diff_elements(
-            split_by,
-            SPLIT_BY,
-            msg=f"Got unsupported value %(diff_set)s in 'split_by'."
-            f" Elements should be one of {SPLIT_BY}.",
         )
 
-        n_samples_as_x_axis_ = check_type(
-            n_samples_as_x_axis, "n_samples_as_x_axis_", bool
-        )
-
-        (sub_fig_width, sub_fig_height) = check_plot_figsize(sub_figsize)
-
-        sup_title_ = check_type(sup_title, "sup_title", (bool, str))
-
-        lineplot_kwargs_ = copy(LINEPLOT_KWARGS_DEFAULT)
-        lineplot_kwargs_.update(lineplot_kwargs)
-        for kw in ["ax", "data", "x", "y", "hue", "style"]:
-            if kw in lineplot_kwargs_.keys():
-                raise ValueError(
-                    f"Cannot set parameter '{kw}' for"
-                    f" performance_lineplot function."
-                )
-
-        # Select data for visualization
-        on_ensembles_mask = vis_perf_dataframe["method"].map(
-            {k: k in on_ensembles for k in self._fit_data.vis_format_["ensemble_names"]}
-        )
-        on_datasets_mask = vis_perf_dataframe["dataset"].map(
-            {k: k in on_datasets for k in self._fit_data.vis_format_["dataset_names"]}
-        )
-        on_metrics_mask = vis_perf_dataframe["metric"].map(
-            {k: k in on_metrics for k in self._fit_data.vis_format_["metric_names"]}
-        )
-        final_mask = on_ensembles_mask & on_datasets_mask & on_metrics_mask
-        vis_perf_dataframe = vis_perf_dataframe.loc[final_mask]
-
-        # Set subfigure x-axis (# estimators or # training samples)
-        if n_samples_as_x_axis_:
-            (
-                include_ensembles,
-                exclude_ensembles,
-            ) = self._split_ensembles_by_has_n_training_samples_(on_ensembles)
-            # If any estimator does not have `estimators_n_training_samples_` attribute
-            if len(exclude_ensembles) > 0:
-                # Raise a warning of excluding some methods from visualization
-                warn(
-                    f"scikit-learn ensemble estimator(s) with name"
-                    + f" {exclude_ensembles} does not record the number"
-                    + f" training samples, they will be excluded from the"
-                    + f" figure when `n_samples_as_x_axis` = `True`."
-                )
-                # Update the number of included ensemble methods
-                n_ensembles = len(include_ensembles)
-                # Select data
-                has_n_samples_mask = vis_perf_dataframe["method"].map(
-                    self._fit_data.ensembles_has_n_training_samples_
-                )
-                vis_perf_dataframe = vis_perf_dataframe.loc[has_n_samples_mask]
-            # Set x-axis to number of samples
-            x_column = "n_samples"
-            x_label = "# Training Samples"
-        else:
-            # Set x-axis to number of base estimators
-            x_column = "n_estimators"
-            x_label = "# Base Estimators"
-
-        # Set figure size and layout
-        n_rows_fig, n_columns_fig = 1, n_metrics
-        if "method" in split_by:
-            n_rows_fig *= n_ensembles
-        if "dataset" in split_by:
-            n_rows_fig *= n_datasets
-
-        total_width, total_height = (
-            sub_fig_width * n_columns_fig,
-            sub_fig_height * n_rows_fig,
-        )
-        # If has sup_title, add reserved space
-        total_height += RESERVED_SUPTITLE_INCHES if sup_title_ else 0
-        figsize = (total_width, total_height)
-        fig, axes = plt.subplots(n_rows_fig, n_columns_fig, figsize=figsize)
-        axes = np.array(axes).reshape(n_rows_fig, n_columns_fig)
-
-        # Set column titles
-        pad = 10
-        col_titles = ["Metric: <{}>".format(metric) for metric in on_metrics]
-        for ax, col_title in zip(axes[0], col_titles):
-            ax.annotate(
-                col_title,
-                xy=(0.5, 1),
-                xytext=(0, pad),
-                xycoords="axes fraction",
-                textcoords="offset points",
-                ha="center",
-                va="baseline",
-                **self._title_styles['row_col'],
+        fig, axes, n_rows_fig, n_columns_fig, total_height = (
+            self._setup_figure_layout(
+                n_ensembles, n_datasets, n_metrics, split_by,
+                sub_fig_width, sub_fig_height, sup_title_, on_metrics
             )
+        )
 
-        # Plot performances on each ax
         vis_df_grp = vis_perf_dataframe.groupby(by=split_by + ["metric"])
         for (key, _), ax in zip(vis_df_grp.groups.items(), axes.flatten()):
             metric_name = key if len(split_by) == 0 else key[-1]
-            # Use seaborn.lineplot for visualization
             kwargs = {
                 "data": vis_df_grp.get_group(key).reset_index(drop=True),
                 "x": x_column,
@@ -789,7 +824,6 @@ class ImbalancedEnsembleVisualizer:
             }
             kwargs.update(lineplot_kwargs_)
             ax = sns.lineplot(**kwargs)
-            # Set legend, border, x_label, y_label, and grid properties
             ax.legend(
                 columnspacing=0.3,
                 borderaxespad=0.3,
@@ -803,20 +837,13 @@ class ImbalancedEnsembleVisualizer:
             ax.set_ylabel(f"{metric_name}", **self._title_styles['axis'])
             ax.grid(color="black", linestyle="-.", alpha=0.3)
 
-        # Use tight layout
         height_rect = (total_height - RESERVED_SUPTITLE_INCHES) / total_height
         plt.tight_layout(rect=(0, 0, 1, height_rect))
 
-        # Set super title
-        if sup_title_ == True:
-            if n_rows_fig == n_columns_fig == 1:
-                fig.suptitle("Performance Curve", **self._title_styles['suptitle'])
-            else:
-                fig.suptitle("Performance Curves", **self._title_styles['suptitle'])
-        elif sup_title_ == False:
-            pass
-        else:
-            fig.suptitle(sup_title_, **self._title_styles['suptitle'])
+        ImbalancedEnsembleVisualizer._set_figure_suptitle(
+            fig, sup_title_, "Performance Curve", "Performance Curves",
+            n_rows_fig == n_columns_fig == 1, self._title_styles['suptitle']
+        )
 
         return fig, axes
 
@@ -1021,15 +1048,9 @@ class ImbalancedEnsembleVisualizer:
         height_rect = (total_height - RESERVED_SUPTITLE_INCHES * 1.3) / total_height
         plt.tight_layout(rect=(0, 0, 1, height_rect))
 
-        # Set super title
-        if sup_title_ == True:
-            if n_rows_fig == n_columns_fig == 1:
-                fig.suptitle("Confusion Matrix", **self._title_styles['suptitle'])
-            else:
-                fig.suptitle("Confusion Matrices", **self._title_styles['suptitle'])
-        elif sup_title_ == False:
-            pass
-        else:
-            fig.suptitle(sup_title_, **self._title_styles['suptitle'])
+        ImbalancedEnsembleVisualizer._set_figure_suptitle(
+            fig, sup_title_, "Confusion Matrix", "Confusion Matrices",
+            n_rows_fig == n_columns_fig == 1, self._title_styles['suptitle']
+        )
 
         return fig, axes
