@@ -317,12 +317,9 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
         }
         X, y = validate_data(self, X, y, **check_x_y_args)
 
-        self._train_state_.eval_datasets_ = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
-        self._train_state_.eval_metrics_ = check_eval_metrics(eval_metrics)
-        self._train_state_.train_verbose_ = check_train_verbose(
-            train_verbose, self.n_estimators, **self._properties
+        self._pre_fit_setup(
+            eval_datasets, eval_metrics, train_verbose, check_x_y_args, X, y
         )
-        self._init_training_log_format()
 
         if sample_weight is not None:
             sample_weight = _check_sample_weight(sample_weight, X, dtype=None)
@@ -342,6 +339,27 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
         if n_more_estimators == 0:
             return self
 
+        self._parallel_fit(n_more_estimators, X, y, sample_weight, random_state)
+
+        self._post_fit_process(X, y)
+
+        return self
+
+    def _pre_fit_setup(
+        self, eval_datasets, eval_metrics, train_verbose, check_x_y_args, X, y
+    ):
+        self._train_state_.eval_datasets_ = check_eval_datasets(
+            eval_datasets, X, y, **check_x_y_args
+        )
+        self._train_state_.eval_metrics_ = check_eval_metrics(eval_metrics)
+        self._train_state_.train_verbose_ = check_train_verbose(
+            train_verbose, self.n_estimators, **self._properties
+        )
+        self._init_training_log_format()
+
+    def _parallel_fit(
+        self, n_more_estimators, X, y, sample_weight, random_state
+    ):
         n_jobs, n_estimators, starts = _partition_estimators(
             n_more_estimators, self.n_jobs
         )
@@ -379,12 +397,11 @@ class CompatibleBaggingClassifier(ImbalancedEnsembleClassifierMixin, BaggingClas
             itertools.chain.from_iterable(t[2] for t in all_results)
         )
 
+    def _post_fit_process(self, X, y):
         if self.oob_score:
             self._set_oob_score(X, y)
 
         self._training_log_to_console()
-
-        return self
 
     def _validate_max_samples(self, max_samples, X):
         if max_samples is None:
