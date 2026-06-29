@@ -517,7 +517,31 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
             The fitted instance.
         """
 
-        # Validate or convert input data
+        X, y_encoded, sample_weight, n_samples_bootstrap = self._validate_and_prepare_data(
+            X, y, sample_weight, eval_datasets, eval_metrics, train_verbose
+        )
+
+        random_state = check_random_state(self.random_state)
+        n_more_estimators = self._get_n_more_estimators(random_state)
+
+        if n_more_estimators > 0:
+            self._build_estimators(
+                X, y_encoded, sample_weight, n_samples_bootstrap,
+                n_more_estimators, random_state
+            )
+
+        self._compute_oob_score_if_needed(X, y_encoded)
+
+        if hasattr(self, "classes_") and self.n_outputs_ == 1:
+            self.n_classes_ = self.n_classes_[0]
+            self.classes_ = self.classes_[0]
+
+        self._training_log_to_console()
+
+        return self
+
+    def _validate_and_prepare_data(self, X, y, sample_weight,
+                                    eval_datasets, eval_metrics, train_verbose):
         if issparse(y):
             raise ValueError("sparse multilabel-indicator for y is not supported.")
 
@@ -528,16 +552,12 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
         }
         X, y = validate_data(self, X, y, **check_x_y_args)
 
-        # Create training state container
         self._train_state = SimpleNamespace()
 
-        # Check evaluation data
-        self._train_state.eval_datasets = check_eval_datasets(eval_datasets, X, y, **check_x_y_args)
-
-        # Check evaluation metrics
+        self._train_state.eval_datasets = check_eval_datasets(
+            eval_datasets, X, y, **check_x_y_args
+        )
         self._train_state.eval_metrics = check_eval_metrics(eval_metrics)
-
-        # Check verbose
         self._train_state.train_verbose = check_train_verbose(
             train_verbose, self.n_estimators, **self._properties
         )
@@ -547,11 +567,8 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
             sample_weight = _check_sample_weight(sample_weight, X)
 
         if issparse(X):
-            # Pre-sort indices to avoid that each individual tree of the
-            # ensemble sorts the indices.
             X.sort_indices()
 
-        # Remap output
         _, self.n_features_in_ = X.shape
 
         y = np.atleast_1d(y)
@@ -565,8 +582,6 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
             )
 
         if y.ndim == 1:
-            # reshape is necessary to preserve the data contiguity against vs
-            # [:, np.newaxis] that does not.
             y = np.reshape(y, (-1, 1))
 
         self.n_outputs_ = y.shape[1]
@@ -594,21 +609,19 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
             else:
                 sample_weight = expanded_class_weight
 
-        # Get bootstrap sample size
         n_samples_bootstrap = _get_n_samples_bootstrap(
             n_samples=X.shape[0], max_samples=self.max_samples
         )
 
-        # Check parameters
         self._validate_estimator()
 
         if not self.bootstrap and self.oob_score:
             raise ValueError("Out of bag estimation only available if bootstrap=True")
 
-        random_state = check_random_state(self.random_state)
+        return X, y_encoded, sample_weight, n_samples_bootstrap
 
+    def _get_n_more_estimators(self, random_state):
         if not self.warm_start or not hasattr(self, "estimators_"):
-            # Free allocated memory, if any
             self.estimators_ = []
             self.estimators_n_training_samples_ = []
             self.samplers_ = []
@@ -630,64 +643,48 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
             )
         else:
             if self.warm_start and len(self.estimators_) > 0:
-                # We draw from the random state to get the random state we
-                # would have got if we hadn't used a warm_start.
                 random_state.randint(MAX_INT, size=len(self.estimators_))
 
-            trees = []
-            samplers = []
-            for _ in range(n_more_estimators):
-                tree, sampler = self._make_sampler_estimator(random_state=random_state)
-                trees.append(tree)
-                samplers.append(sampler)
+        return n_more_estimators
 
-            # Parallel loop: we prefer the threading backend as the Cython code
-            # for fitting the trees is internally releasing the Python GIL
-            # making threading more efficient than multiprocessing in
-            # that case. However, we respect any parallel_backend contexts set
-            # at a higher level, since correctness does not rely on using
-            # threads.
-            samplers_trees = Parallel(
-                n_jobs=self.n_jobs, verbose=self.verbose, prefer="threads"
-            )(
-                delayed(_local_parallel_build_trees)(
-                    s,
-                    t,
-                    self.bootstrap,
-                    X,
-                    y_encoded,
-                    sample_weight,
-                    i,
-                    len(trees),
-                    verbose=self.verbose,
-                    class_weight=self.class_weight,
-                    n_samples_bootstrap=n_samples_bootstrap,
-                    forest=self,
-                )
-                for i, (s, t) in enumerate(zip(samplers, trees))
+    def _build_estimators(self, X, y_encoded, sample_weight,
+                          n_samples_bootstrap, n_more_estimators, random_state):
+        trees = []
+        samplers = []
+        for _ in range(n_more_estimators):
+            tree, sampler = self._make_sampler_estimator(random_state=random_state)
+            trees.append(tree)
+            samplers.append(sampler)
+
+        samplers_trees = Parallel(
+            n_jobs=self.n_jobs, verbose=self.verbose, prefer="threads"
+        )(
+            delayed(_local_parallel_build_trees)(
+                s, t, self.bootstrap, X, y_encoded, sample_weight,
+                i, len(trees), verbose=self.verbose,
+                class_weight=self.class_weight,
+                n_samples_bootstrap=n_samples_bootstrap,
+                forest=self,
             )
-            samplers, trees, n_training_samples = zip(*samplers_trees)
+            for i, (s, t) in enumerate(zip(samplers, trees))
+        )
+        samplers, trees, n_training_samples = zip(*samplers_trees)
 
-            # Collect newly grown trees
-            self.estimators_.extend(trees)
-            self.samplers_.extend(samplers)
-            self.estimators_n_training_samples_.extend(n_training_samples)
+        self.estimators_.extend(trees)
+        self.samplers_.extend(samplers)
+        self.estimators_n_training_samples_.extend(n_training_samples)
 
-            # Create pipeline with the fitted samplers and trees
-            self.pipelines_.extend(
-                [
-                    make_pipeline(deepcopy(s), deepcopy(t))
-                    for s, t in zip(samplers, trees)
-                ]
-            )
+        self.pipelines_.extend(
+            [
+                make_pipeline(deepcopy(s), deepcopy(t))
+                for s, t in zip(samplers, trees)
+            ]
+        )
 
+    def _compute_oob_score_if_needed(self, X, y_encoded):
         if self.oob_score:
-            y_type = type_of_target(y)
+            y_type = type_of_target(y_encoded)
             if y_type in ("multiclass-multioutput", "unknown"):
-                # FIXME: we could consider to support multiclass-multioutput if
-                # we introduce or reuse a constructor parameter (e.g.
-                # oob_score) allowing our user to pass a callable defining the
-                # scoring strategy on OOB sample.
                 raise ValueError(
                     "The type of target cannot be used to compute OOB "
                     f"estimates. Got {y_type} while only the following are "
@@ -695,16 +692,6 @@ class BalancedRandomForestClassifier(  # pylint: disable=too-many-instance-attri
                     "multiclass, multilabel-indicator."
                 )
             self._set_oob_score_and_attributes(X, y_encoded)
-
-        # Decapsulate classes_ attributes
-        if hasattr(self, "classes_") and self.n_outputs_ == 1:
-            self.n_classes_ = self.n_classes_[0]
-            self.classes_ = self.classes_[0]
-
-        # Print training infomation to console.
-        self._training_log_to_console()
-
-        return self
 
     def _set_oob_score_and_attributes(self, X, y):
         """Compute and set the OOB score and attributes.
