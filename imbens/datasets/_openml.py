@@ -21,6 +21,49 @@ from typing import OrderedDict
 import tqdm
 
 
+def _preprocess_feature(feat, X, feats_type):
+    if is_any_real_numeric_dtype(X[feat]):
+        feats_type["num"].append(feat)
+        if X[feat].isnull().sum() > 0:
+            X[feat] = X[feat].fillna(X[feat].mean())
+    else:
+        if X[feat].isnull().sum() > 0:
+            X[feat] = X[feat].fillna(X[feat].mode().iloc[0])
+        n_unique = len(X[feat].unique())
+        if n_unique > 2:
+            try:
+                X[feat] = pd.to_numeric(X[feat])
+            except ValueError:
+                if n_unique <= 50:
+                    feats_type["multi_cat"].append(feat)
+                else:
+                    feats_type["drop"].append(feat)
+        else:
+            feats_type["bin_cat"].append(feat)
+
+
+def _cat_drop(X, feats_type, ord_encoder):
+    return X.drop(columns=feats_type["multi_cat"] + feats_type["bin_cat"])
+
+
+def _cat_onehot(X, feats_type, ord_encoder):
+    X[feats_type["bin_cat"]] = ord_encoder.fit_transform(X[feats_type["bin_cat"]])
+    return pd.get_dummies(X, columns=feats_type["multi_cat"])
+
+
+def _cat_ordinal(X, feats_type, ord_encoder):
+    X[feats_type["bin_cat"]] = ord_encoder.fit_transform(X[feats_type["bin_cat"]])
+    X[feats_type["multi_cat"]] = ord_encoder.fit_transform(X[feats_type["multi_cat"]])
+    return X
+
+
+_CAT_PREPROCESSORS = {
+    "drop": _cat_drop,
+    "onehot": _cat_onehot,
+    "ordinal": _cat_ordinal,
+}
+
+
 def _fetch_openml_data(openml_id, cat_preprocess="onehot", data_home=None):
     """
     Fetches a dataset from OpenML, preprocesses it, and caches it locally.
@@ -58,14 +101,13 @@ def _fetch_openml_data(openml_id, cat_preprocess="onehot", data_home=None):
             data_home = Path(user_cache_dir("imbens")) / "datasets"
             data_home.mkdir(parents=True, exist_ok=True)
             return data_home
-        else:
-            # check if store_path is a valid path
-            if not isinstance(data_home, Path):
-                data_home = Path(data_home)
-            if not data_home.is_dir():
-                raise ValueError(f"data_home {data_home} is not a directory")
-            data_home.mkdir(parents=True, exist_ok=True)
-            return data_home
+
+        if not isinstance(data_home, Path):
+            data_home = Path(data_home)
+        if not data_home.is_dir():
+            raise ValueError(f"data_home {data_home} is not a directory")
+        data_home.mkdir(parents=True, exist_ok=True)
+        return data_home
 
     def save_data(X, y, data_home, file_name):
         np.savez_compressed(data_home / file_name, X=X, y=y)
@@ -110,47 +152,12 @@ def _fetch_openml_data(openml_id, cat_preprocess="onehot", data_home=None):
     y = y.map(y_map)
 
     feats_type = {"num": [], "bin_cat": [], "multi_cat": [], "drop": []}
-    # preprocessing
     for feat in X.columns:
-        if is_any_real_numeric_dtype(X[feat]):
-            feats_type["num"].append(feat)
-            if X[feat].isnull().sum() > 0:
-                # for numerical columns, fill nan with mean
-                X[feat] = X[feat].fillna(X[feat].mean())
-        else:  # categorical column
-            if X[feat].isnull().sum() > 0:
-                # for categorical columns, fill nan with most frequent value
-                X[feat] = X[feat].fillna(X[feat].mode().iloc[0])
-            n_unique = len(X[feat].unique())
-            if n_unique > 2:
-                # try to convert to numeric
-                try:
-                    X[feat] = pd.to_numeric(X[feat])
-                except ValueError:
-                    if n_unique <= 50:
-                        feats_type["multi_cat"].append(feat)
-                    else:
-                        feats_type["drop"].append(feat)
-            else:
-                feats_type["bin_cat"].append(feat)
+        _preprocess_feature(feat, X, feats_type)
 
     ord_encoder = OrdinalEncoder()
     X = X.drop(columns=feats_type["drop"])
-    # encode categorical columns
-    if cat_preprocess == "drop":
-        X = X.drop(columns=feats_type["multi_cat"])
-        X = X.drop(columns=feats_type["bin_cat"])
-    elif cat_preprocess == "onehot":
-        X[feats_type["bin_cat"]] = ord_encoder.fit_transform(X[feats_type["bin_cat"]])
-        X = pd.get_dummies(X, columns=feats_type["multi_cat"])
-    elif cat_preprocess == "ordinal":
-        # ordinal encoding for multi categorical columns
-        X[feats_type["bin_cat"]] = ord_encoder.fit_transform(X[feats_type["bin_cat"]])
-        X[feats_type["multi_cat"]] = ord_encoder.fit_transform(
-            X[feats_type["multi_cat"]]
-        )
-    else:
-        raise ValueError(f"Unknown cat_preprocess: {cat_preprocess}")
+    X = _CAT_PREPROCESSORS[cat_preprocess](X, feats_type, ord_encoder)
 
     # standardize numerical columns
     scaler = StandardScaler()
